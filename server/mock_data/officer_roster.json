@@ -1,0 +1,6 @@
+{
+  "4521": {"name": "Officer Martinez", "unit": "Patrol", "supervisor": "Sgt. Johnson"},
+  "3892": {"name": "Officer Chen", "unit": "Traffic", "supervisor": "Sgt. Williams"},
+  "7734": {"name": "Officer Davis", "unit": "Patrol", "supervisor": "Sgt. Johnson"},
+  "1001": {"name": "Officer Demo", "unit": "Patrol", "supervisor": "Sgt. Demo"}
+}

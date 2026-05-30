@@ -1,0 +1,15 @@
+{
+  "report_type": "arrest_report",
+  "required_fields": [
+    {"field": "arrestee_name", "label": "Arrestee Full Name", "priority": 1},
+    {"field": "arrestee_dob", "label": "Date of Birth", "priority": 1},
+    {"field": "arrest_time", "label": "Time of Arrest", "priority": 1},
+    {"field": "arrest_location", "label": "Location of Arrest", "priority": 1},
+    {"field": "charges", "label": "Charges Filed", "priority": 1},
+    {"field": "miranda_given", "label": "Miranda Rights Given", "priority": 1},
+    {"field": "miranda_time", "label": "Time Miranda Given", "priority": 1},
+    {"field": "arresting_officer", "label": "Arresting Officer", "priority": 1},
+    {"field": "booking_number", "label": "Booking Number", "priority": 2},
+    {"field": "property_seized", "label": "Property Seized", "priority": 3}
+  ]
+}

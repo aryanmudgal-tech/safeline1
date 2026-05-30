@@ -1,0 +1,26 @@
+[
+  {
+    "id": "domestic_with_arrest_and_force",
+    "title": "Domestic disturbance with arrest and use of force",
+    "badge_number": "4521",
+    "expected_reports": ["incident_report", "arrest_report", "use_of_force"],
+    "is_emergency": false,
+    "narrative": "This is Officer Martinez, badge four-five-two-one. Okay, so I responded to a domestic disturbance call at 1420 Oak Street, apartment 3B, around 9:45 PM tonight. Neighbor called it in, said they heard yelling and something breaking. When I got there the door was open and I could hear a man and a woman arguing. The woman, Sarah Coleman, she had a cut on her lip and was crying. The male, that's her boyfriend Marcus Bell, he was agitated, yelling at her, and when I tried to separate them he shoved me into the doorframe and took a swing. I gave verbal commands to stop, he didn't comply, so I used an empty-hand control hold to take him to the ground and cuffed him. He's got a scrape on his elbow from the takedown, I called for medical and they checked him out, refused transport. I read him his Miranda rights right there at the scene. Arrested him for domestic battery and assault on a peace officer. Sarah declined medical for her lip. I took photos of the apartment and her injury. My body cam was on the whole time. Sergeant Johnson was notified and came to the scene."
+  },
+  {
+    "id": "traffic_stop_dui_arrest",
+    "title": "Traffic stop leading to a DUI arrest",
+    "badge_number": "3892",
+    "expected_reports": ["incident_report", "arrest_report"],
+    "is_emergency": false,
+    "narrative": "Officer Chen, badge three-eight-nine-two, Traffic unit. I pulled over a silver Honda Civic, license plate 7-Victor-Charlie-King-3-3-9, for weaving across lanes on Highway 9 northbound near the Elm Street exit at about 11:20 PM. Driver is David Okafor, date of birth March 14th, 1991. When I approached I smelled a strong odor of alcohol and his eyes were bloodshot and watery. Speech was slurred. I had him step out and ran field sobriety tests, he failed the walk-and-turn and the one-leg stand. Preliminary breath test read 0.13. I placed him under arrest for DUI at approximately 11:38 PM, read him his Miranda rights at the scene, and transported him to county for booking. No force was used, he was cooperative. I had the Civic towed. No passengers, no injuries, no accident."
+  },
+  {
+    "id": "simple_theft_incident_only",
+    "title": "Simple theft report, incident only, no arrest",
+    "badge_number": "7734",
+    "expected_reports": ["incident_report"],
+    "is_emergency": false,
+    "narrative": "This is Officer Davis, badge seven-seven-three-four. I'm taking a theft report at the QuickMart on 5th and Main, happened around 3:15 this afternoon. Store clerk, Priya Patel, says a male suspect walked in, grabbed two cases of beer and a carton of cigarettes, and walked out without paying. Suspect is described as a white male, mid-twenties, about six foot, wearing a red hoodie and jeans. No weapon shown, no one was hurt. He left on foot heading east on Main. I reviewed the store's surveillance footage and got a still image. No arrest, suspect is still outstanding. Estimated loss is about ninety dollars. I gave the clerk a case number for insurance."
+  }
+]

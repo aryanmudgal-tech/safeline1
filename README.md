@@ -1,3 +1,92 @@
+# Safeline — Police Voice Documentation Agent
+
+> Built for the YC Voice Agents Hackathon on top of the Pipecat starter kit.
+
+Safeline is a voice agent that police officers call after an incident. The officer narrates what happened in natural speech; the agent listens, asks targeted follow-up questions to fill gaps, then generates the required police documentation (incident / arrest / use-of-force / accident reports) and texts the officer a link to review, edit, and approve the drafts. Every correction the officer makes is fed back to improve future reports.
+
+**How it beats Axon Draft One**
+
+| Draft One | Safeline |
+| --- | --- |
+| Deletes the AI draft after export (no audit trail) | Every incident is persisted with both the **immutable AI draft** and the **officer-edited version** in `server/data/incidents/` |
+| Hallucinates from ambient audio ("officer shapeshifted into a frog") | `extraction_accuracy` evaluator flags any field not grounded in the transcript; the model is instructed to use `null` over invention |
+| Passive (only summarizes body-cam footage) | Active two-phase voice interview: open narrative → one-question-at-a-time gap filling |
+| Never learns from corrections | Three-layer auto-improvement loop; Layer 1 injects similar past officer corrections as few-shot examples at generation time |
+
+## Architecture
+
+The Pipecat pipeline, Twilio transport, and Pipecat Cloud deploy are **unchanged** from the starter kit. Only the business logic was swapped in.
+
+| File | Role |
+| --- | --- |
+| `server/bot-gpt.py` | Voice bot (Gradium STT → GPT → Gradium TTS). **Run this one first.** |
+| `server/bot-nemotron.py` | Same bot on NVIDIA Nemotron STT+LLM (use once endpoints are provided). |
+| `server/police_agent.py` | Shared police logic: two-phase system prompt, roster lookup, LLM tools, transcript capture, report generation + review-link SMS. |
+| `server/report_generator.py` | LLM field extraction + the permanent, file-backed report store (AI draft + officer version + diff). |
+| `server/templates/*.json` | Required-field definitions for each report type. |
+| `server/mock_data/officer_roster.json` | Badge → officer lookup. |
+| `server/mock_data/demo_scenarios.json` | Three pre-written 60s narratives for testing without calls. |
+| `server/improvement/correction_store.py` | Auto-improvement Layer 1: semantic store of officer corrections (faiss + MiniLM if installed, token-overlap fallback otherwise). |
+| `server/review_ui/` | Standalone FastAPI app + SPA where the officer reviews/edits/approves reports. |
+| `server/cekura_eval.py` | Four evaluators: completeness, extraction accuracy, escalation correctness, question coverage. |
+
+## Run the demo (under 3 minutes)
+
+```bash
+cd server
+uv sync                 # add `--extra improve` for faiss/MiniLM dense retrieval (optional)
+
+# Terminal 1 — voice bot (WebRTC at http://localhost:7860)
+uv run bot-gpt.py
+
+# Terminal 2 — review UI (http://localhost:8080)
+uv run python review_ui/api.py
+```
+
+Open http://localhost:7860, click **Connect**, and run a scenario from `mock_data/demo_scenarios.json` (e.g. give badge **3892**, then read the DUI narrative). When the agent says it's generating reports, it stores them and (if Twilio creds + a caller number are set) texts the review link. The link opens the review UI; the link is also logged to the bot's console for local WebRTC testing where there's no phone number.
+
+**Test report generation without a call:**
+
+```bash
+uv run python -c "import asyncio,json; from dotenv import load_dotenv; load_dotenv(); \
+from report_generator import generate_reports; \
+s=json.load(open('mock_data/demo_scenarios.json'))[1]; \
+print(asyncio.run(generate_reports('OFFICER: '+s['narrative'], s['expected_reports'], s['badge_number'])))"
+```
+
+**Evaluate a stored incident (Cekura-style):**
+
+```bash
+uv run python cekura_eval.py --all          # or pass an INC-... id
+```
+
+## Cekura integration
+
+The four evaluators in `cekura_eval.py` mirror the custom evaluators to register in the Cekura dashboard:
+
+1. `report_completeness` — are all required fields populated (non-null)?
+2. `extraction_accuracy` — was the right info extracted from the transcript (no hallucinations)?
+3. `escalation_correctness` — did emergencies get flagged for human review instead of documented?
+4. `question_coverage` — did the agent ask about every required field it didn't hear?
+
+Drive Cekura end-to-end from Claude Code:
+
+```
+/plugin marketplace add cekura-ai/cekura-skills
+/plugin install cekura@cekura-skills
+/cekura-report
+```
+
+`GET /api/reports/{incident_id}/diff` exposes the officer-vs-AI corrections for Cekura to consume.
+
+## Auto-improvement loop
+
+When an officer approves a report with edits, `approve_report()` computes the field-level diff and calls `correction_store.add_correction()`. Those corrections are embedded and, on the next generation, the most similar ones are injected into the extraction prompt as few-shot examples — so the agent stops repeating mistakes. Seed examples live in `mock_data/synthetic_corrections.json`.
+
+> Safety: if the officer reports a serious injury, fatality, or ongoing emergency, the agent escalates to a supervisor and **never** generates a report.
+
+---
+
 # YC Voice Agents Hackathon
 
 Welcome to the YC Voice Agents Hackathon, hosted by [Cekura](https://cekura.com) and [Daily](https://daily.co), in partnership with [NVIDIA](https://nvidia.com), [AWS](https://aws.amazon.com), and [Twilio](https://twilio.com).

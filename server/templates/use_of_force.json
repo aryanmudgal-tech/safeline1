@@ -1,0 +1,14 @@
+{
+  "report_type": "use_of_force",
+  "required_fields": [
+    {"field": "force_type", "label": "Type of Force Used", "priority": 1},
+    {"field": "force_justification", "label": "Justification for Force", "priority": 1},
+    {"field": "subject_behavior", "label": "Subject Behavior Prior to Force", "priority": 1},
+    {"field": "injuries_officer", "label": "Officer Injuries", "priority": 1},
+    {"field": "injuries_subject", "label": "Subject Injuries", "priority": 1},
+    {"field": "medical_attention", "label": "Medical Attention Provided", "priority": 1},
+    {"field": "witnesses", "label": "Witnesses to Use of Force", "priority": 2},
+    {"field": "supervisor_notified", "label": "Supervisor Notified", "priority": 1},
+    {"field": "body_cam_activated", "label": "Body Camera Activated", "priority": 2}
+  ]
+}

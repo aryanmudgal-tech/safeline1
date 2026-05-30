@@ -1,0 +1,47 @@
+[
+  {
+    "transcript": "I responded to a domestic disturbance, the male shoved me and I took him to the ground with a control hold and cuffed him.",
+    "report_type": "use_of_force",
+    "field": "force_type",
+    "original": "physical force",
+    "corrected": "Empty-hand control (takedown / control hold)",
+    "category": "force_terminology",
+    "note": "Officers use the agency force continuum terminology, not the vague phrase 'physical force'."
+  },
+  {
+    "transcript": "I read him his rights at the scene before transport.",
+    "report_type": "arrest_report",
+    "field": "miranda_given",
+    "original": "Yes, at the scene",
+    "corrected": "Yes - Miranda advised verbally at scene prior to questioning",
+    "category": "miranda_phrasing",
+    "note": "Miranda field should state it was given prior to custodial interrogation."
+  },
+  {
+    "transcript": "Driver failed the field sobriety tests and blew a 0.13 on the preliminary breath test, arrested for DUI.",
+    "report_type": "arrest_report",
+    "field": "charges",
+    "original": "DUI",
+    "corrected": "VC 23152(a) - Driving Under the Influence of Alcohol",
+    "category": "charge_codes",
+    "note": "Charges should reference the statutory vehicle/penal code section, not just the plain-language offense."
+  },
+  {
+    "transcript": "Suspect grabbed two cases of beer and a carton of cigarettes and walked out, loss about ninety dollars.",
+    "report_type": "incident_report",
+    "field": "incident_type",
+    "original": "theft",
+    "corrected": "Petty theft / shoplifting (loss under $950)",
+    "category": "incident_classification",
+    "note": "Classify theft by statutory threshold (petty vs grand) based on stated loss value."
+  },
+  {
+    "transcript": "I called for medical and they checked the subject out at the scene, he refused transport.",
+    "report_type": "use_of_force",
+    "field": "medical_attention",
+    "original": "Medical called",
+    "corrected": "EMS responded, subject evaluated on scene, refused transport (signed AMA)",
+    "category": "medical_detail",
+    "note": "Medical attention field should capture EMS response, evaluation, and refusal/transport disposition."
+  }
+]

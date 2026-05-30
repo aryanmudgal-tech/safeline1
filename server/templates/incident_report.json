@@ -1,0 +1,16 @@
+{
+  "report_type": "incident_report",
+  "required_fields": [
+    {"field": "incident_date", "label": "Date of Incident", "priority": 1},
+    {"field": "incident_time", "label": "Time of Incident", "priority": 1},
+    {"field": "incident_location", "label": "Location", "priority": 1},
+    {"field": "incident_type", "label": "Type of Incident", "priority": 1},
+    {"field": "reporting_officer_badge", "label": "Reporting Officer Badge", "priority": 1},
+    {"field": "suspect_description", "label": "Suspect Description", "priority": 2},
+    {"field": "victim_name", "label": "Victim Name", "priority": 2},
+    {"field": "narrative", "label": "Incident Narrative", "priority": 1},
+    {"field": "disposition", "label": "Disposition", "priority": 2},
+    {"field": "witnesses", "label": "Witnesses", "priority": 3},
+    {"field": "evidence", "label": "Evidence Collected", "priority": 3}
+  ]
+}

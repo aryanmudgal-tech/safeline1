@@ -8,6 +8,16 @@ dependencies = [
     "pipecatcloud>=0.7.1",
 ]
 
+[project.optional-dependencies]
+# Auto-improvement Layer 1 (semantic correction store). Optional: the
+# correction store transparently falls back to token-overlap similarity when
+# these aren't installed, so the bot runs without them. Install with:
+#   uv sync --extra improve
+improve = [
+    "sentence-transformers>=2.2.0",
+    "faiss-cpu>=1.7.4",
+]
+
 [dependency-groups]
 dev = [
     "pyright>=1.1.404,<2",

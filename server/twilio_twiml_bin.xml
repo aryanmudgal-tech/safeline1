@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Safeline / Pipecat Cloud — Twilio TwiML Bin
+  ===========================================
+  This is what Twilio must return when a call comes in. It opens a
+  BIDIRECTIONAL media stream to Pipecat Cloud's managed WebSocket endpoint and
+  routes the call to your deployed agent via _pipecatCloudServiceHost.
+
+  Format of _pipecatCloudServiceHost: AGENT_NAME.ORGANIZATION_NAME
+    AGENT_NAME        = agent_name in pcc-deploy.toml   -> "flower-bot"
+    ORGANIZATION_NAME = your Pipecat Cloud org          -> "axxyush"
+
+  HOW TO USE (Twilio Console):
+    1. Develop → TwiML Bins → Create new TwiML Bin, paste this whole file.
+    2. Phone Numbers → your number → Voice Configuration →
+       "A call comes in" → set to "TwiML Bin" → select this bin → Save.
+    Do NOT set "A call comes in" to a plain Webhook URL — that is what caused
+    the "application error has occurred" drop.
+
+  (If you deployed to a region, use wss://{region}.api.pipecat.daily.co/ws/twilio)
+-->
+<Response>
+  <Connect>
+    <Stream url="wss://api.pipecat.daily.co/ws/twilio">
+      <Parameter name="_pipecatCloudServiceHost" value="flower-bot.axxyush"/>
+    </Stream>
+  </Connect>
+</Response>

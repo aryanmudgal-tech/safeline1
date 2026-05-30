@@ -1,0 +1,14 @@
+{
+  "report_type": "accident_report",
+  "required_fields": [
+    {"field": "vehicle_1_plate", "label": "Vehicle 1 License Plate", "priority": 1},
+    {"field": "vehicle_2_plate", "label": "Vehicle 2 License Plate", "priority": 1},
+    {"field": "driver_1_name", "label": "Driver 1 Name", "priority": 1},
+    {"field": "driver_2_name", "label": "Driver 2 Name", "priority": 1},
+    {"field": "accident_location", "label": "Accident Location", "priority": 1},
+    {"field": "accident_time", "label": "Time of Accident", "priority": 1},
+    {"field": "injuries", "label": "Injuries", "priority": 1},
+    {"field": "fault_determination", "label": "Fault Determination", "priority": 2},
+    {"field": "insurance_info", "label": "Insurance Information", "priority": 2}
+  ]
+}
