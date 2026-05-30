@@ -93,13 +93,19 @@ are being filed?
 4. Evidence: Items collected, photos taken
 5. Administrative: Case number, assisting officers
 
-When all critical fields are filled, say: "I have everything I need. I'm \
-generating your reports now." In that SAME turn, call the generate_reports \
-tool with the list of report types you decided on. The tool returns the \
-officer's access code in the "spoken_code" field. The code is ALWAYS EXACTLY \
-SIX DIGITS.
+When all critical fields are filled, your NEXT action must be to call the \
+generate_reports tool with the list of report types you decided on. Do not say \
+an access code, portal code, confirmation question, or closing line before the \
+tool call completes. The generate_reports tool is the ONLY source of a valid \
+access code. The tool returns the officer's access code in the "spoken_code" \
+field. The code is ALWAYS EXACTLY SIX DIGITS.
 
 ACCESS CODE HANDOFF (follow exactly):
+- If you have not just received a generate_reports tool result containing \
+"spoken_code", you do not have an access code yet. In that case, NEVER mention \
+an access code or portal code.
+- After the tool result, say: "I have everything I need. I've generated your \
+reports. Your Safeline access code is..." and then read the code.
 - Read the code using the EXACT words given in the tool's "spoken_code" field, \
 ONE digit at a time, slowly (for example: "four... eight... one... nine... \
 two... zero").
@@ -122,7 +128,8 @@ RULES:
 - Never ask about something already mentioned in the narrative.
 - Never make up information - only use what the officer told you.
 - The access code is ALWAYS exactly six digits. Read only the digits provided \
-by the generate_reports tool, exactly six of them, one at a time.
+by the generate_reports tool, exactly six of them, one at a time. Inventing a \
+code is a critical failure because the portal will not contain that report.
 - If the officer mentions a serious injury, a fatality, or an ongoing emergency, \
 immediately say "This sounds like it needs immediate attention - please contact \
 your supervisor directly" and call the escalate_emergency tool. Do NOT generate \
@@ -229,21 +236,24 @@ async def submit_reports_to_review_ui(
         "transcript": transcript,
         "generated_at": datetime.datetime.now().isoformat(),
     }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                f"{review_ui_url}/api/reports/save", json=payload
-            ) as resp:
-                if resp.status != 200:
+    for attempt in range(1, 4):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{review_ui_url}/api/reports/save", json=payload
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            f"Posted reports to review portal {review_ui_url} under code {code}"
+                        )
+                        return True
                     logger.error(
-                        f"Review UI save failed ({resp.status}): {await resp.text()}"
+                        f"Review UI save failed on attempt {attempt} "
+                        f"({resp.status}): {await resp.text()}"
                     )
-                    return False
-        logger.info(f"Posted reports to review portal {review_ui_url} under code {code}")
-        return True
-    except Exception as e:
-        logger.error(f"Failed to post reports to review portal: {e}")
-        return False
+        except Exception as e:
+            logger.error(f"Failed to post reports to review portal on attempt {attempt}: {e}")
+    return False
 
 
 def code_repeat_instruction(code: str) -> str:
@@ -332,7 +342,8 @@ def create_tools(session: dict) -> list:
         """Generate the police reports from the conversation, hand them to the
         review portal, and return a six-digit access code the officer will use
         to review them. Call this only after all legally-critical fields are
-        filled and you've told the officer you're generating their reports.
+        filled. This tool is the ONLY valid way to obtain an access code; never
+        invent, guess, or speak a code before this tool returns.
 
         Args:
             report_types: Which reports to generate. Valid values:
@@ -391,10 +402,6 @@ def create_tools(session: dict) -> list:
 
         clean_reports = _strip_report_metadata(reports)
         code = access_code
-        session["access_code"] = code
-        # Until the officer confirms receipt, the idle watchdog will re-read the
-        # code every ~15s of silence (see the bot pipeline's IdleFrameProcessor).
-        session["awaiting_code_confirmation"] = True
         posted = await submit_reports_to_review_ui(
             code=code,
             incident_id=incident_id,
@@ -403,6 +410,24 @@ def create_tools(session: dict) -> list:
             reports=clean_reports,
             transcript=transcript,
         )
+        if not posted:
+            session["awaiting_code_confirmation"] = False
+            await params.result_callback(
+                {
+                    "ok": False,
+                    "reason": (
+                        "Reports were generated, but the review portal upload failed. "
+                        "Do not give the officer an access code. Apologize briefly and "
+                        "ask them to try again."
+                    ),
+                }
+            )
+            return
+
+        session["access_code"] = code
+        # Until the officer confirms receipt, the idle watchdog will re-read the
+        # code every ~15s of silence (see the bot pipeline's IdleFrameProcessor).
+        session["awaiting_code_confirmation"] = True
 
         await params.result_callback(
             {
