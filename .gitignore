@@ -227,3 +227,4 @@ pipecat-core-code/
 # Safeline runtime data (generated reports / audit trail + learned corrections)
 server/data/
 server/mock_data/corrections_log.jsonl
+server/.env.deploy
