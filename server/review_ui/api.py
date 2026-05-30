@@ -1,44 +1,46 @@
-"""Safeline review UI + API (6-digit access-code model).
+"""Safeline review UI + API.
 
-The voice bot runs on Pipecat Cloud (remote) and this review UI runs locally.
-They cannot share memory or files, so the bot POSTs generated reports to this
-service's public (ngrok) URL. Reports are keyed by a 6-digit access code that
-the bot speaks to the officer; the officer enters that code in the portal to
-review, edit, and approve their reports.
+The voice bot can run separately from this portal, so the bot POSTs generated
+reports to ``/api/reports/save`` under the six-digit access code it reads to the
+officer. The officer then enters that code in the portal, edits the reports, and
+approves them. Approval preserves the immutable AI draft, stores field-level
+diffs, and feeds officer corrections into the improvement loop.
 
 Run it::
 
     uv run python review_ui/api.py
     # or
     uv run uvicorn review_ui.api:app --port 8080
-
-Routes:
-    GET  /                          -> the portal SPA (code entry + review)
-    POST /api/reports/save          -> bot saves generated reports under a code
-    GET  /api/reports/{code}        -> officer portal looks up reports by code
-    POST /api/reports/{code}/approve-> officer approves (stores diff + status)
-    GET  /api/incidents             -> list all incidents (debugging)
 """
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-from datetime import datetime
-from functools import lru_cache
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 _SERVER_DIR = Path(__file__).resolve().parent.parent
 if str(_SERVER_DIR) not in sys.path:
     sys.path.insert(0, str(_SERVER_DIR))
 
-_TEMPLATES_DIR = _SERVER_DIR / "templates"
+from report_generator import (  # noqa: E402
+    approve_report,
+    approve_reports as approve_reports_impl,
+    get_diffs,
+    list_incidents,
+    portal_response,
+    resolve_incident,
+    store_reports,
+)
+
+load_dotenv(override=True)
+
 _INDEX_HTML = Path(__file__).resolve().parent / "index.html"
 
 app = FastAPI(title="Safeline Review Portal")
@@ -49,202 +51,118 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory store: code -> report data. (Demo storage; swap for a DB in prod.)
-REPORTS_STORE: dict[str, dict] = {}
-
 
 class ReportSubmission(BaseModel):
     code: str
     incident_id: str
     officer_badge: str
-    officer_name: str
+    officer_name: str | None = None
     reports: dict
-    transcript: str
-    generated_at: str
+    transcript: str = ""
+    generated_at: str | None = None
 
 
-class ApprovalSubmission(BaseModel):
-    edited_reports: dict
-    # Which report was approved (lets the portal track per-report progress).
-    # Optional for backwards compatibility; when omitted, all reports are marked.
+class ApproveBody(BaseModel):
+    edited_reports: dict | None = None
     report_type: str | None = None
-
-
-# --------------------------------------------------------------------------- #
-# Template labels (loaded locally so the portal can show human-friendly labels)
-# --------------------------------------------------------------------------- #
-@lru_cache(maxsize=1)
-def _templates() -> dict:
-    """Return {report_type: [{field, label, priority}, ...]} from templates/."""
-    out: dict[str, list] = {}
-    if not _TEMPLATES_DIR.exists():
-        return out
-    for path in _TEMPLATES_DIR.glob("*.json"):
-        try:
-            with open(path) as f:
-                tpl = json.load(f)
-            out[tpl["report_type"]] = tpl.get("required_fields", [])
-        except Exception:
-            continue
-    return out
-
-
-def _field_layout(report_type: str, present_fields: list[str]) -> list[dict]:
-    """Ordered [{field, label, priority}] for a report: template order first,
-    then any extra fields the model returned that aren't in the template."""
-    template = _templates().get(report_type, [])
-    layout = []
-    seen = set()
-    for spec in template:
-        f = spec["field"]
-        if f in present_fields:
-            layout.append(
-                {"field": f, "label": spec.get("label", _titleize(f)), "priority": spec.get("priority", 2)}
-            )
-            seen.add(f)
-    for f in present_fields:
-        if f not in seen:
-            layout.append({"field": f, "label": _titleize(f), "priority": 2})
-    return layout
-
-
-def _titleize(field: str) -> str:
-    return field.replace("_", " ").title()
-
-
-# --------------------------------------------------------------------------- #
-# Diff (field-level; clearer for the UI than a generic object diff)
-# --------------------------------------------------------------------------- #
-def _diff_report(original: dict, edited: dict) -> dict:
-    """Return {field: {original, corrected}} for fields that changed."""
-    diff = {}
-    for f in set(original) | set(edited):
-        before = original.get(f)
-        after = edited.get(f)
-        if (before or None) != (after or None):
-            diff[f] = {"original": before, "corrected": after}
-    return diff
-
-
-def _feed_corrections(transcript: str, diffs: dict):
-    """Best-effort: push officer edits into the auto-improvement store."""
-    if not transcript or not diffs:
-        return
-    try:
-        from improvement.correction_store import correction_store
-
-        for report_type, fields in diffs.items():
-            for field, change in fields.items():
-                correction_store.add_correction(
-                    transcript=transcript,
-                    original=change.get("original"),
-                    corrected=change.get("corrected"),
-                    category=f"{report_type}:{field}",
-                    report_type=report_type,
-                    field=field,
-                    note="Captured from officer portal edit.",
-                )
-    except Exception:
-        # The learning loop must never block an approval.
-        pass
-
-
-# --------------------------------------------------------------------------- #
-# Routes
-# --------------------------------------------------------------------------- #
-@app.post("/api/reports/save")
-async def save_reports(submission: ReportSubmission):
-    """Called by the bot to save generated reports under a 6-digit code."""
-    # Deep copy so the immutable AI draft can never be mutated by later edits.
-    original = json.loads(json.dumps(submission.reports))
-    layouts = {rt: _field_layout(rt, list(fields.keys())) for rt, fields in submission.reports.items()}
-
-    REPORTS_STORE[submission.code] = {
-        "incident_id": submission.incident_id,
-        "officer_badge": submission.officer_badge,
-        "officer_name": submission.officer_name,
-        "reports": submission.reports,
-        "original_reports": original,
-        "field_layouts": layouts,
-        "transcript": submission.transcript,
-        "generated_at": submission.generated_at,
-        "status": "pending_review",
-        "approved_report_types": [],
-        "diffs": {},
-    }
-    return {"success": True, "code": submission.code}
-
-
-@app.get("/api/reports/{code}")
-async def get_reports(code: str):
-    """Called by the officer portal to look up reports by code."""
-    if code not in REPORTS_STORE:
-        raise HTTPException(status_code=404, detail="Code not found")
-    return REPORTS_STORE[code]
-
-
-@app.post("/api/reports/{code}/approve")
-async def approve_reports(code: str, submission: ApprovalSubmission):
-    """Called when an officer approves one (or all) reports."""
-    if code not in REPORTS_STORE:
-        raise HTTPException(status_code=404, detail="Code not found")
-
-    record = REPORTS_STORE[code]
-    original = record["original_reports"]
-    edited = submission.edited_reports
-
-    targets = [submission.report_type] if submission.report_type else list(edited.keys())
-
-    diffs = dict(record.get("diffs", {}))
-    changed = 0
-    for rt in targets:
-        d = _diff_report(original.get(rt, {}), edited.get(rt, {}))
-        diffs[rt] = d
-        changed += len(d)
-
-    approved = set(record.get("approved_report_types", []))
-    approved.update(targets)
-
-    record["approved_reports"] = edited
-    record["diffs"] = diffs
-    record["approved_report_types"] = sorted(approved)
-    record["approved_at"] = datetime.now().isoformat()
-    total = len(record["reports"])
-    record["status"] = "approved" if len(approved) >= total else "partially_approved"
-
-    _feed_corrections(record.get("transcript", ""), {rt: diffs.get(rt, {}) for rt in targets})
-
-    return {
-        "success": True,
-        "changes": changed,
-        "approved_report_types": record["approved_report_types"],
-        "status": record["status"],
-    }
-
-
-@app.get("/api/incidents")
-async def list_incidents():
-    """List all incidents (debugging)."""
-    return {
-        code: {
-            "incident_id": data["incident_id"],
-            "officer_name": data["officer_name"],
-            "generated_at": data["generated_at"],
-            "status": data["status"],
-        }
-        for code, data in REPORTS_STORE.items()
-    }
+    fields: dict | None = None
 
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
+    return await review_page()
+
+
+@app.get("/review", response_class=HTMLResponse)
+async def review_page():
     if _INDEX_HTML.exists():
         return HTMLResponse(content=_INDEX_HTML.read_text())
     return HTMLResponse("<h1>index.html not found</h1>", status_code=500)
 
 
+@app.post("/api/reports/save")
+async def save_reports(submission: ReportSubmission):
+    """Called by the voice bot to save generated reports under a six-digit code."""
+    officer = {
+        "name": submission.officer_name,
+        "badge": submission.officer_badge,
+    }
+    try:
+        record = store_reports(
+            submission.incident_id,
+            submission.reports,
+            transcript=submission.transcript,
+            officer=officer,
+            officer_badge=submission.officer_badge,
+            access_code=submission.code,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    return {"success": True, "code": submission.code, **portal_response(record)}
+
+
+@app.get("/api/incidents")
+async def api_list_incidents():
+    return {"incidents": list_incidents()}
+
+
+@app.get("/api/reports/{identifier}")
+async def api_get_reports(identifier: str):
+    record = resolve_incident(identifier)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Unknown report code {identifier}")
+    return portal_response(record)
+
+
+@app.post("/api/reports/{identifier}/approve")
+async def api_approve(identifier: str, body: ApproveBody):
+    try:
+        if body.report_type:
+            record = resolve_incident(identifier)
+            if not record:
+                raise KeyError(f"Unknown report code {identifier}")
+            edited = body.fields
+            if edited is None and body.edited_reports is not None:
+                edited = body.edited_reports.get(body.report_type, body.edited_reports)
+            report = approve_report(record["incident_id"], body.report_type, edited or {})
+            updated = resolve_incident(identifier) or record
+            return {"success": True, "report": report, **portal_response(updated)}
+
+        if body.edited_reports is not None:
+            record = approve_reports_impl(identifier, body.edited_reports)
+            return {"success": True, **portal_response(record)}
+
+        raise ValueError("Provide edited_reports, or report_type and fields")
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@app.get("/api/reports/{identifier}/diff")
+async def api_diff(identifier: str):
+    record = resolve_incident(identifier)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Unknown report code {identifier}")
+    return {"incident_id": record["incident_id"], "diffs": get_diffs(record["incident_id"])}
+
+
+@app.get("/api/reports/{identifier}/evaluate")
+async def api_evaluate(identifier: str):
+    record = resolve_incident(identifier)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Unknown report code {identifier}")
+    try:
+        from cekura_eval import evaluate_incident
+
+        return JSONResponse(evaluate_incident(record))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {e}")
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("REVIEW_UI_PORT", "8080"))
+    port = int(os.getenv("REVIEW_UI_PORT", os.getenv("APP_PORT", "8080")))
     uvicorn.run(app, host="0.0.0.0", port=port)

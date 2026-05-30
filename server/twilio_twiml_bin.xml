@@ -8,7 +8,7 @@
 
   Format of _pipecatCloudServiceHost: AGENT_NAME.ORGANIZATION_NAME
     AGENT_NAME        = agent_name in pcc-deploy.toml   -> "flower-bot"
-    ORGANIZATION_NAME = your Pipecat Cloud org          -> "axxyush"
+    ORGANIZATION_NAME = your Pipecat Cloud org          -> "safeline"
 
   HOW TO USE (Twilio Console):
     1. Develop → TwiML Bins → Create new TwiML Bin, paste this whole file.
@@ -22,7 +22,7 @@
 <Response>
   <Connect>
     <Stream url="wss://api.pipecat.daily.co/ws/twilio">
-      <Parameter name="_pipecatCloudServiceHost" value="flower-bot.axxyush"/>
+      <Parameter name="_pipecatCloudServiceHost" value="flower-bot.safeline"/>
     </Stream>
   </Connect>
 </Response>

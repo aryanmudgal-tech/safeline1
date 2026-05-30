@@ -3,433 +3,705 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Safeline — Report Review Portal</title>
+<title>Safeline Report Portal</title>
 <style>
   :root {
-    --bg: #0b0f17;
-    --bg-2: #0d1117;
-    --panel: #141a24;
-    --panel-2: #1a2230;
-    --border: #283342;
-    --text: #e8eef6;
-    --muted: #8a97a8;
-    --accent: #3b82f6;
-    --accent-2: #2563eb;
-    --green: #22c55e;
-    --green-bg: #0f2a1a;
-    --amber: #f59e0b;
-    --red: #ef4444;
-    --red-bg: #2a1212;
+    --bg: #f6f7f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f4;
+    --border: #d8dee3;
+    --text: #1f2933;
+    --muted: #65717d;
+    --accent: #145c63;
+    --accent-2: #0f464b;
+    --green: #176b3a;
+    --green-bg: #e8f5ee;
+    --amber: #8a5a00;
+    --amber-bg: #fff4d7;
+    --red: #a83232;
+    --red-bg: #fdeaea;
+    --focus: #77aeb4;
   }
   * { box-sizing: border-box; }
-  html, body { height: 100%; }
   body {
     margin: 0;
-    background: radial-gradient(1200px 600px at 50% -10%, #16203180, transparent), var(--bg);
+    background: var(--bg);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    line-height: 1.5;
+    line-height: 1.45;
   }
-  .brand { display: flex; align-items: center; gap: 12px; justify-content: center; }
-  .brand .logo {
-    width: 40px; height: 40px; border-radius: 10px;
-    background: linear-gradient(135deg, var(--accent), #1e40af);
-    display: grid; place-items: center; font-weight: 800; font-size: 20px; color: #fff;
-    box-shadow: 0 6px 20px #2563eb44;
+  .topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 16px 24px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
-  .brand h1 { font-size: 22px; margin: 0; letter-spacing: .3px; }
-  .brand .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .screen { display: none; }
-  .screen.active { display: block; }
-
-  /* ---- Screen 1: code entry ---- */
-  #screen-code { min-height: 100vh; display: none; place-items: center; padding: 24px; }
-  #screen-code.active { display: grid; }
-  .code-card {
-    width: 100%; max-width: 460px; background: var(--panel);
-    border: 1px solid var(--border); border-radius: 18px; padding: 36px 32px;
-    box-shadow: 0 20px 60px #00000055;
+  .brand {
+    align-items: center;
+    display: flex;
+    gap: 12px;
+    margin: 0 auto;
+    max-width: 1080px;
   }
-  .code-card .brand { margin-bottom: 28px; }
-  .code-label { text-align: center; color: var(--muted); font-size: 14px; margin-bottom: 18px; }
-  .digits { display: flex; gap: 10px; justify-content: center; margin-bottom: 22px; }
-  .digit {
-    width: 52px; height: 64px; text-align: center; font-size: 28px; font-weight: 700;
-    background: var(--bg-2); color: var(--text);
-    border: 1.5px solid var(--border); border-radius: 12px; caret-color: var(--accent);
+  .logo {
+    align-items: center;
+    background: var(--accent);
+    border-radius: 6px;
+    color: #fff;
+    display: flex;
+    font-weight: 800;
+    height: 34px;
+    justify-content: center;
+    width: 34px;
   }
-  .digit:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px #3b82f633; }
-  .btn {
-    width: 100%; background: var(--accent); color: #fff; border: none; border-radius: 12px;
-    padding: 14px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background .15s;
+  h1 {
+    font-size: 18px;
+    line-height: 1.1;
+    margin: 0;
   }
-  .btn:hover { background: var(--accent-2); }
-  .btn:disabled { opacity: .5; cursor: default; }
-  .code-hint { text-align: center; color: var(--muted); font-size: 12px; margin-top: 16px; }
-  .code-error { text-align: center; color: #ff9a9a; font-size: 13px; min-height: 18px; margin-top: 12px; }
-
-  /* ---- Screen 2: reports ---- */
-  header.topbar {
-    background: linear-gradient(180deg, #11161f, var(--bg-2));
-    border-bottom: 1px solid var(--border); padding: 16px 24px; position: sticky; top: 0; z-index: 20;
+  .subtitle {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
   }
-  .topbar-inner { max-width: 940px; margin: 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-  .topbar .brand { justify-content: flex-start; }
-  .topbar h1 { font-size: 17px; }
-  .who { text-align: right; font-size: 13px; color: var(--muted); }
-  .who b { color: var(--text); }
-  .wrap { max-width: 940px; margin: 0 auto; padding: 22px 24px 80px; }
-
-  .progress-wrap { margin: 6px 0 18px; }
-  .progress-meta { display: flex; justify-content: space-between; font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-  .progress-bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
-  .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width .35s ease; }
-
-  .ai-badge {
-    display: flex; gap: 10px; align-items: flex-start;
-    background: #13233f; border: 1px solid #1e3a63; color: #cfe0ff;
-    padding: 12px 14px; border-radius: 10px; font-size: 13px; margin-bottom: 18px;
+  .wrap {
+    margin: 0 auto;
+    max-width: 1080px;
+    padding: 24px;
   }
-  .ai-badge .dot { font-size: 16px; }
-
-  .tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
-  .tab {
-    background: var(--panel); border: 1px solid var(--border); color: var(--muted);
-    padding: 9px 14px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer;
-    display: flex; align-items: center; gap: 8px;
+  .panel, .report-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
   }
-  .tab.active { color: var(--text); border-color: var(--accent); background: var(--panel-2); }
-  .tab .check { color: var(--green); font-weight: 800; }
-
-  .report { display: none; }
-  .report.active { display: block; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
-  .card-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--panel-2); }
-  .card-head h2 { margin: 0; font-size: 16px; }
-  .pill { font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: .5px; }
-  .pill.draft { background: #2a2410; color: var(--amber); border: 1px solid #4a3d12; }
-  .pill.approved { background: var(--green-bg); color: var(--green); border: 1px solid #1d4a2c; }
-
-  .fields { padding: 8px 20px 4px; }
-  .field { padding: 12px 0; border-bottom: 1px solid #1d2531; }
-  .field:last-child { border-bottom: none; }
-  .field label { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
-  .prio { font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px; }
-  .prio.p1 { background: var(--red-bg); color: #ff9a9a; }
-  .prio.p2 { background: #2a2410; color: var(--amber); }
-  .prio.p3 { background: #1c2330; color: var(--muted); }
-  .field input, .field textarea {
-    width: 100%; background: var(--bg-2); color: var(--text);
-    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
-    font-size: 14px; font-family: inherit; resize: vertical;
+  .panel {
+    padding: 22px;
   }
-  .field input:focus, .field textarea:focus { outline: none; border-color: var(--accent); }
-  .field input.changed, .field textarea.changed { border-color: var(--amber); }
-  .field .empty-hint { font-size: 12px; color: #b9748f; margin-top: 5px; }
-
-  .card-foot { padding: 16px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-  .approve-note { font-size: 13px; color: var(--muted); }
-  .btn-inline { width: auto; padding: 10px 18px; }
-
-  details.transcript { margin-top: 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; }
-  details.transcript summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  details.transcript pre { white-space: pre-wrap; font-size: 13px; margin-top: 12px; }
-
-  /* ---- Success ---- */
-  #screen-done { min-height: 100vh; display: none; place-items: center; padding: 24px; text-align: center; }
-  #screen-done.active { display: grid; }
-  .done-card { max-width: 460px; background: var(--panel); border: 1px solid var(--border); border-radius: 18px; padding: 44px 32px; }
-  .done-check { width: 72px; height: 72px; margin: 0 auto 20px; border-radius: 50%; background: var(--green-bg); border: 2px solid var(--green); display: grid; place-items: center; font-size: 38px; color: var(--green); }
-  .done-card h2 { margin: 0 0 8px; }
-  .done-card p { color: var(--muted); font-size: 14px; }
-
-  .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--panel-2); border: 1px solid var(--border); padding: 12px 18px; border-radius: 10px; font-size: 14px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 50; }
+  .code-panel {
+    margin: 72px auto 0;
+    max-width: 520px;
+  }
+  .panel-title {
+    font-size: 18px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+  .panel-copy {
+    color: var(--muted);
+    font-size: 14px;
+    margin: 0 0 18px;
+  }
+  .code-inputs {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    margin-bottom: 16px;
+  }
+  .code-inputs input {
+    aspect-ratio: 1;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 26px;
+    font-weight: 700;
+    text-align: center;
+    width: 100%;
+  }
+  .code-inputs input:focus,
+  input:focus,
+  textarea:focus {
+    border-color: var(--focus);
+    box-shadow: 0 0 0 3px rgba(119, 174, 180, .22);
+    outline: none;
+  }
+  .actions {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  button {
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    min-height: 40px;
+    padding: 10px 16px;
+  }
+  button.primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  button.primary:hover { background: var(--accent-2); }
+  button.secondary {
+    background: var(--surface-2);
+    color: var(--text);
+  }
+  button:disabled {
+    cursor: default;
+    opacity: .55;
+  }
+  .message {
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .message.error { color: var(--red); }
+  .meta {
+    display: grid;
+    gap: 10px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-bottom: 18px;
+  }
+  .meta-item {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .meta-label {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+  .meta-value {
+    font-size: 14px;
+    margin-top: 4px;
+    overflow-wrap: anywhere;
+  }
+  .status {
+    align-items: center;
+    border-radius: 8px;
+    display: flex;
+    gap: 10px;
+    margin-bottom: 18px;
+    padding: 12px 14px;
+  }
+  .status.generating { background: var(--amber-bg); color: var(--amber); }
+  .status.pending_review { background: var(--surface-2); color: var(--text); }
+  .status.approved { background: var(--green-bg); color: var(--green); }
+  .status.generation_failed,
+  .status.escalated { background: var(--red-bg); color: var(--red); }
+  .status-dot {
+    background: currentColor;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    height: 8px;
+    width: 8px;
+  }
+  .toolbar {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  .toolbar h2 {
+    font-size: 20px;
+    margin: 0;
+  }
+  .report-card {
+    margin-bottom: 18px;
+    overflow: hidden;
+  }
+  .report-head {
+    align-items: center;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    padding: 14px 16px;
+  }
+  .report-head h3 {
+    font-size: 16px;
+    margin: 0;
+  }
+  .pill {
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 4px 9px;
+    text-transform: uppercase;
+  }
+  .pill.draft { background: var(--amber-bg); color: var(--amber); }
+  .pill.approved { background: var(--green-bg); color: var(--green); }
+  .fields {
+    padding: 6px 16px 10px;
+  }
+  .field {
+    border-bottom: 1px solid var(--border);
+    padding: 12px 0;
+  }
+  .field:last-child {
+    border-bottom: 0;
+  }
+  label {
+    color: var(--muted);
+    display: flex;
+    font-size: 13px;
+    font-weight: 700;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .prio {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+  }
+  input, textarea {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font: inherit;
+    padding: 9px 10px;
+    width: 100%;
+  }
+  textarea {
+    min-height: 86px;
+    resize: vertical;
+  }
+  input.changed, textarea.changed {
+    border-color: #d69d26;
+  }
+  .ai-original {
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 5px;
+  }
+  .diff {
+    border-top: 1px solid var(--border);
+    padding: 12px 16px 16px;
+  }
+  .diff-title {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+    margin-bottom: 8px;
+  }
+  .diff-row {
+    background: #fafbfc;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+  }
+  .diff-field { font-weight: 800; }
+  .diff-old { color: var(--red); text-decoration: line-through; }
+  .diff-new { color: var(--green); }
+  details.transcript {
+    margin-top: 18px;
+  }
+  details.transcript summary {
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  details.transcript pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-size: 13px;
+    margin-top: 10px;
+    overflow: auto;
+    padding: 14px;
+    white-space: pre-wrap;
+  }
+  .toast {
+    background: var(--text);
+    border-radius: 8px;
+    bottom: 24px;
+    color: #fff;
+    font-size: 14px;
+    left: 50%;
+    opacity: 0;
+    padding: 12px 16px;
+    pointer-events: none;
+    position: fixed;
+    transform: translateX(-50%);
+    transition: opacity .2s;
+  }
   .toast.show { opacity: 1; }
+  @media (max-width: 760px) {
+    .wrap { padding: 18px; }
+    .meta { grid-template-columns: 1fr 1fr; }
+    .toolbar { align-items: stretch; flex-direction: column; }
+    .toolbar .actions { width: 100%; }
+    .toolbar button { flex: 1; }
+  }
+  @media (max-width: 460px) {
+    .code-inputs { gap: 6px; }
+    .code-inputs input { font-size: 22px; }
+    .meta { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-
-  <!-- SCREEN 1 — CODE ENTRY -->
-  <section id="screen-code" class="screen active">
-    <div class="code-card">
-      <div class="brand">
-        <div class="logo">S</div>
-        <div>
-          <h1>Safeline</h1>
-          <div class="sub">Police Documentation Portal</div>
-        </div>
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">S</div>
+      <div>
+        <h1>Safeline</h1>
+        <div class="subtitle">Report Review Portal</div>
       </div>
-      <div class="code-label">Enter your 6-digit access code</div>
-      <div class="digits" id="digits">
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-        <input class="digit" maxlength="1" inputmode="numeric" pattern="[0-9]" />
-      </div>
-      <button class="btn" id="view-btn">View Reports</button>
-      <div class="code-error" id="code-error"></div>
-      <div class="code-hint">The code was read to you at the end of your call.</div>
     </div>
-  </section>
+  </header>
 
-  <!-- SCREEN 2 — REPORTS -->
-  <section id="screen-reports" class="screen">
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div class="brand">
-          <div class="logo">S</div>
-          <div>
-            <h1>Safeline</h1>
-            <div class="sub">Report Review</div>
-          </div>
-        </div>
-        <div class="who" id="who"></div>
-      </div>
-    </header>
-    <div class="wrap">
-      <div class="progress-wrap">
-        <div class="progress-meta">
-          <span id="progress-label">0 of 0 reports approved</span>
-          <span id="progress-pct">0%</span>
-        </div>
-        <div class="progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
-      </div>
-
-      <div class="ai-badge">
-        <span class="dot">&#9888;&#65039;</span>
-        <span>Draft generated by AI from officer verbal account. Officer review and approval required before filing.</span>
-      </div>
-
-      <div class="tabs" id="tabs"></div>
-      <div id="reports"></div>
-
-      <details class="transcript" id="transcript-wrap">
-        <summary>View source transcript (audit trail)</summary>
-        <pre id="transcript"></pre>
-      </details>
-    </div>
-  </section>
-
-  <!-- SCREEN 3 — NOT FOUND handled inline on screen 1 via code-error -->
-
-  <!-- SUCCESS -->
-  <section id="screen-done" class="screen">
-    <div class="done-card">
-      <div class="done-check">&#10003;</div>
-      <h2>All reports approved</h2>
-      <p>Your reports have been reviewed and approved for filing. Both the original AI draft and your approved version are stored on the permanent audit trail.</p>
-    </div>
-  </section>
-
+  <main class="wrap" id="app"></main>
   <div class="toast" id="toast"></div>
 
 <script>
-const API = ""; // same origin as this portal
-let DATA = null;
-let CURRENT = null;          // active report_type tab
-let APPROVED = new Set();    // approved report types (client view)
-
-function $(id) { return document.getElementById(id); }
-function show(screenId) {
-  document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
-  $(screenId).classList.add("active");
-}
-function esc(s) {
-  if (s === null || s === undefined) return "";
-  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-}
-function titleize(s) { return String(s).replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()); }
-function toast(msg) {
-  const t = $("toast"); t.textContent = msg; t.classList.add("show");
-  setTimeout(() => t.classList.remove("show"), 2600);
-}
-
-// ---------- Screen 1: digit boxes ----------
-const digitEls = Array.from(document.querySelectorAll(".digit"));
-digitEls.forEach((el, i) => {
-  el.addEventListener("input", () => {
-    el.value = el.value.replace(/[^0-9]/g, "");
-    if (el.value && i < digitEls.length - 1) digitEls[i + 1].focus();
-  });
-  el.addEventListener("keydown", (e) => {
-    if (e.key === "Backspace" && !el.value && i > 0) digitEls[i - 1].focus();
-    if (e.key === "Enter") submitCode();
-  });
-  el.addEventListener("paste", (e) => {
-    e.preventDefault();
-    const digits = (e.clipboardData.getData("text") || "").replace(/[^0-9]/g, "").slice(0, 6).split("");
-    digits.forEach((d, k) => { if (digitEls[k]) digitEls[k].value = d; });
-    if (digits.length) digitEls[Math.min(digits.length, 5)].focus();
-  });
-});
-digitEls[0].focus();
-$("view-btn").addEventListener("click", submitCode);
-
-function readCode() { return digitEls.map(e => e.value).join(""); }
-
-async function submitCode() {
-  const code = readCode();
-  const err = $("code-error");
-  if (code.length !== 6) { err.textContent = "Please enter all 6 digits."; return; }
-  err.textContent = "";
-  $("view-btn").disabled = true;
-  try {
-    const res = await fetch(`${API}/api/reports/${code}`);
-    if (res.status === 404) {
-      err.textContent = "Code not found. Please check with your supervisor.";
-      return;
-    }
-    if (!res.ok) throw new Error(await res.text());
-    DATA = await res.json();
-    DATA._code = code;
-    APPROVED = new Set(DATA.approved_report_types || []);
-    renderReports();
-    show("screen-reports");
-  } catch (e) {
-    err.textContent = "Something went wrong. Try again.";
-  } finally {
-    $("view-btn").disabled = false;
-  }
-}
-
-// ---------- Screen 2: reports ----------
 const LONG_FIELDS = new Set([
   "narrative", "force_justification", "subject_behavior", "suspect_description",
   "disposition", "evidence", "witnesses", "property_seized", "insurance_info",
-  "injuries", "injuries_officer", "injuries_subject", "medical_attention", "fault_determination"
+  "injuries", "injuries_officer", "injuries_subject", "medical_attention",
+  "fault_determination", "vehicle_damage", "probable_cause"
 ]);
 
-function reportTypes() { return Object.keys(DATA.reports || {}); }
+let activeCode = codeFromUrl();
+let activeRecord = null;
+let pollTimer = null;
 
-function renderReports() {
-  $("who").innerHTML = `<b>${esc(DATA.officer_name || ("Badge " + DATA.officer_badge))}</b><br>Incident ${esc(DATA.incident_id)}`;
-  $("transcript").textContent = DATA.transcript || "(no transcript)";
-
-  const types = reportTypes();
-  CURRENT = CURRENT && types.includes(CURRENT) ? CURRENT : types[0];
-
-  // tabs
-  $("tabs").innerHTML = types.map(rt => `
-    <div class="tab ${rt === CURRENT ? "active" : ""}" data-rt="${rt}">
-      <span>${titleize(rt)}</span>
-      ${APPROVED.has(rt) ? '<span class="check">&#10003;</span>' : ""}
-    </div>`).join("");
-  $("tabs").querySelectorAll(".tab").forEach(t =>
-    t.addEventListener("click", () => { CURRENT = t.dataset.rt; renderReports(); }));
-
-  // report bodies
-  $("reports").innerHTML = types.map(rt => renderReport(rt)).join("");
-  types.forEach(rt => wireReport(rt));
-
-  updateProgress();
+function codeFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  return (params.get("code") || params.get("incident_id") || "").replace(/\D/g, "").slice(0, 6);
 }
 
-function renderReport(rt) {
-  const layout = (DATA.field_layouts && DATA.field_layouts[rt]) ||
-    Object.keys(DATA.reports[rt]).map(f => ({ field: f, label: titleize(f), priority: 2 }));
-  const values = DATA.reports[rt] || {};
-  const approved = APPROVED.has(rt);
+function esc(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).replace(/[&<>"]/g, ch => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;"
+  }[ch]));
+}
 
-  const fieldsHtml = layout.map(spec => {
-    const f = spec.field;
-    const raw = values[f];
-    const valStr = (raw === null || raw === undefined) ? "" : (typeof raw === "object" ? JSON.stringify(raw) : raw);
-    const long = LONG_FIELDS.has(f) || (typeof valStr === "string" && valStr.length > 60);
-    const id = `${rt}__${f}`;
+function titleize(value) {
+  return String(value || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, ch => ch.toUpperCase());
+}
+
+function displayValue(value) {
+  if (value === null || value === undefined || value === "") return "";
+  return typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function statusLabel(status) {
+  return {
+    generating: "Reports generating",
+    pending_review: "Pending review",
+    approved: "Approved",
+    generation_failed: "Generation failed",
+    escalated: "Escalated"
+  }[status] || titleize(status);
+}
+
+function toast(message) {
+  const node = document.getElementById("toast");
+  node.textContent = message;
+  node.classList.add("show");
+  setTimeout(() => node.classList.remove("show"), 2600);
+}
+
+function setUrlCode(code) {
+  const url = new URL(window.location.href);
+  url.searchParams.set("code", code);
+  url.searchParams.delete("incident_id");
+  window.history.replaceState({}, "", url);
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function startPolling() {
+  stopPolling();
+  pollTimer = setInterval(() => loadCode(activeCode, { silent: true }), 10000);
+}
+
+function renderCodeEntry(error = "") {
+  stopPolling();
+  const app = document.getElementById("app");
+  app.innerHTML = `
+    <section class="panel code-panel">
+      <div class="panel-title">Enter report code</div>
+      <p class="panel-copy">Use the six-digit code provided on the call.</p>
+      <form id="code-form">
+        <div class="code-inputs" aria-label="Six digit report code">
+          ${Array.from({ length: 6 }, (_, i) => `
+            <input inputmode="numeric" autocomplete="one-time-code"
+              maxlength="1" pattern="[0-9]" data-index="${i}" aria-label="Digit ${i + 1}" />
+          `).join("")}
+        </div>
+        <div class="actions">
+          <button class="primary" type="submit">Open Reports</button>
+          <span class="message error" id="code-error">${esc(error)}</span>
+        </div>
+      </form>
+    </section>
+  `;
+
+  const form = document.getElementById("code-form");
+  const inputs = [...form.querySelectorAll("input")];
+  inputs[0].focus();
+
+  inputs.forEach((input, index) => {
+    input.addEventListener("input", () => {
+      input.value = input.value.replace(/\D/g, "").slice(0, 1);
+      if (input.value && index < inputs.length - 1) inputs[index + 1].focus();
+    });
+    input.addEventListener("keydown", event => {
+      if (event.key === "Backspace" && !input.value && index > 0) inputs[index - 1].focus();
+    });
+    input.addEventListener("paste", event => {
+      event.preventDefault();
+      const pasted = (event.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, 6);
+      pasted.split("").forEach((digit, offset) => {
+        if (inputs[offset]) inputs[offset].value = digit;
+      });
+      inputs[Math.min(pasted.length, 5)].focus();
+    });
+  });
+
+  form.addEventListener("submit", event => {
+    event.preventDefault();
+    const code = inputs.map(input => input.value).join("");
+    if (code.length !== 6) {
+      document.getElementById("code-error").textContent = "Enter all six digits.";
+      return;
+    }
+    activeCode = code;
+    setUrlCode(code);
+    loadCode(code);
+  });
+}
+
+async function loadCode(code, options = {}) {
+  if (!code || code.length !== 6) {
+    renderCodeEntry();
+    return;
+  }
+  if (!options.silent) {
+    document.getElementById("app").innerHTML = `<section class="panel">Loading report ${esc(code)}...</section>`;
+  }
+
+  try {
+    const response = await fetch(`/api/reports/${encodeURIComponent(code)}`);
+    if (response.status === 404) {
+      renderCodeEntry("No reports were found for that code.");
+      return;
+    }
+    if (!response.ok) throw new Error(await response.text());
+    activeRecord = await response.json();
+    renderRecord(activeRecord);
+  } catch (error) {
+    if (options.silent) return;
+    renderCodeEntry(`Could not load reports: ${error.message}`);
+  }
+}
+
+function renderRecord(record) {
+  const app = document.getElementById("app");
+  const reports = record.reports || {};
+  const status = record.status || "generating";
+  const generated = record.generated_at ? new Date(record.generated_at).toLocaleString() : "Not ready";
+
+  if (status === "generating") startPolling();
+  else stopPolling();
+
+  let html = `
+    <div class="toolbar">
+      <h2>Report ${esc(record.access_code || activeCode)}</h2>
+      <div class="actions">
+        <button class="secondary" type="button" onclick="renderCodeEntry()">Use Another Code</button>
+        ${Object.keys(reports).length ? '<button class="primary" id="approve-all" type="button">Approve All Reports</button>' : ""}
+      </div>
+    </div>
+    <div class="meta">
+      ${metaItem("Incident", record.incident_id || "-")}
+      ${metaItem("Officer", record.officer_name || "Badge " + (record.officer_badge || "-"))}
+      ${metaItem("Badge", record.officer_badge || "-")}
+      ${metaItem("Generated", generated)}
+    </div>
+    <div class="status ${esc(status)}">
+      <span class="status-dot"></span>
+      <span>${esc(statusLabel(status))}</span>
+    </div>
+  `;
+
+  if (status === "generating") {
+    html += `
+      <section class="panel">
+        <div class="panel-title">Reports are still being generated.</div>
+        <p class="panel-copy">This page will refresh automatically. You can also check again manually.</p>
+        <button class="secondary" type="button" id="refresh-now">Check Again</button>
+      </section>
+    `;
+    app.innerHTML = html;
+    document.getElementById("refresh-now").addEventListener("click", () => loadCode(activeCode));
+    return;
+  }
+
+  if (status === "generation_failed" || status === "escalated") {
+    html += `
+      <section class="panel">
+        <div class="panel-title">${esc(statusLabel(status))}</div>
+        <p class="panel-copy">${esc(record.generation_error || record.escalation_reason || "No report is available for this code.")}</p>
+      </section>
+    `;
+    app.innerHTML = html;
+    return;
+  }
+
+  if (!Object.keys(reports).length) {
+    html += `<section class="panel">No report payload is available for this code.</section>`;
+  }
+
+  for (const [reportType, fields] of Object.entries(reports)) {
+    html += renderReport(reportType, fields, record);
+  }
+
+  if (record.transcript) {
+    html += `
+      <details class="transcript">
+        <summary>Source transcript</summary>
+        <pre>${esc(record.transcript)}</pre>
+      </details>
+    `;
+  }
+
+  app.innerHTML = html;
+  wireReportInputs(record);
+  const approveButton = document.getElementById("approve-all");
+  if (approveButton) approveButton.addEventListener("click", approveAllReports);
+}
+
+function metaItem(label, value) {
+  return `
+    <div class="meta-item">
+      <div class="meta-label">${esc(label)}</div>
+      <div class="meta-value">${esc(value)}</div>
+    </div>
+  `;
+}
+
+function renderReport(reportType, fields, record) {
+  const template = record.report_templates?.[reportType] || [];
+  const draft = record.ai_draft?.[reportType] || {};
+  const approval = record.approvals?.[reportType] || {};
+  const specs = template.length
+    ? template
+    : Object.keys(fields || {}).map(field => ({ field, label: titleize(field), priority: 2 }));
+  const approved = Boolean(approval.approved);
+
+  const fieldHtml = specs.map(spec => {
+    const field = spec.field;
+    const value = displayValue(fields?.[field]);
+    const original = displayValue(draft?.[field]);
+    const long = LONG_FIELDS.has(field) || value.length > 72;
+    const inputId = `${reportType}__${field}`;
     const control = long
-      ? `<textarea id="${id}" data-rt="${rt}" data-field="${f}" rows="3" placeholder="Not captured — add if known">${esc(valStr)}</textarea>`
-      : `<input id="${id}" data-rt="${rt}" data-field="${f}" value="${esc(valStr)}" placeholder="Not captured — add if known" />`;
-    const hint = (raw === null || raw === undefined)
-      ? `<div class="empty-hint">AI did not capture this field — add it if you know it.</div>` : "";
+      ? `<textarea id="${inputId}" data-report="${reportType}" data-field="${field}" rows="3">${esc(value)}</textarea>`
+      : `<input id="${inputId}" data-report="${reportType}" data-field="${field}" value="${esc(value)}" />`;
+    const originalText = original ? `AI draft: ${original}` : "AI draft: not captured";
+
     return `
       <div class="field">
-        <label>${esc(spec.label || titleize(f))}<span class="prio p${spec.priority || 2}">P${spec.priority || 2}</span></label>
-        ${control}${hint}
-      </div>`;
+        <label for="${inputId}">
+          <span>${esc(spec.label || titleize(field))}</span>
+          <span class="prio">P${esc(spec.priority || 2)}</span>
+        </label>
+        ${control}
+        <div class="ai-original">${esc(originalText)}</div>
+      </div>
+    `;
   }).join("");
 
   return `
-    <div class="report ${rt === CURRENT ? "active" : ""}" id="report-${rt}">
-      <div class="card">
-        <div class="card-head">
-          <h2>${titleize(rt)}</h2>
-          <span class="pill ${approved ? "approved" : "draft"}" id="pill-${rt}">${approved ? "Approved" : "Draft"}</span>
-        </div>
-        <div class="fields">${fieldsHtml}</div>
-        <div class="card-foot">
-          <button class="btn btn-inline" id="btn-${rt}">${approved ? "Re-approve with edits" : "Approve Report"}</button>
-          <span class="approve-note" id="note-${rt}"></span>
-        </div>
+    <section class="report-card" id="card-${reportType}">
+      <div class="report-head">
+        <h3>${esc(titleize(reportType))}</h3>
+        <span class="pill ${approved ? "approved" : "draft"}">${approved ? "Approved" : "Draft"}</span>
       </div>
-    </div>`;
+      <div class="fields">${fieldHtml}</div>
+      ${renderDiff(approval.diff || {})}
+    </section>
+  `;
 }
 
-function wireReport(rt) {
-  const body = $(`report-${rt}`);
-  const original = (DATA.original_reports && DATA.original_reports[rt]) || {};
-  body.querySelectorAll("[data-field]").forEach(el => {
-    el.addEventListener("input", () => {
-      const f = el.dataset.field;
-      const orig = (original[f] === null || original[f] === undefined) ? "" : String(original[f]);
-      el.classList.toggle("changed", el.value !== orig);
+function renderDiff(diff) {
+  const keys = Object.keys(diff || {});
+  if (!keys.length) return "";
+  return `
+    <div class="diff">
+      <div class="diff-title">Officer corrections to AI draft (${keys.length})</div>
+      ${keys.map(field => `
+        <div class="diff-row">
+          <div class="diff-field">${esc(titleize(field))}</div>
+          <div class="diff-old">${esc(displayValue(diff[field].original) || "(blank)")}</div>
+          <div class="diff-new">${esc(displayValue(diff[field].corrected) || "(blank)")}</div>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function wireReportInputs(record) {
+  document.querySelectorAll("[data-report][data-field]").forEach(input => {
+    input.addEventListener("input", () => {
+      const report = input.dataset.report;
+      const field = input.dataset.field;
+      const original = displayValue(record.ai_draft?.[report]?.[field]);
+      input.classList.toggle("changed", input.value !== original);
     });
   });
-  $(`btn-${rt}`).addEventListener("click", () => approve(rt));
 }
 
-function collectAllEdits() {
+function collectEditedReports() {
   const edited = {};
-  reportTypes().forEach(rt => {
-    edited[rt] = {};
-    document.querySelectorAll(`#report-${rt} [data-field]`).forEach(el => {
-      const v = el.value.trim();
-      edited[rt][el.dataset.field] = v === "" ? null : v;
-    });
+  document.querySelectorAll("[data-report][data-field]").forEach(input => {
+    const report = input.dataset.report;
+    const field = input.dataset.field;
+    if (!edited[report]) edited[report] = {};
+    const value = input.value.trim();
+    edited[report][field] = value === "" ? null : value;
   });
   return edited;
 }
 
-async function approve(rt) {
-  const btn = $(`btn-${rt}`);
-  btn.disabled = true;
-  const edited = collectAllEdits();
-  // keep DATA.reports in sync so re-renders preserve edits
-  DATA.reports = edited;
+async function approveAllReports() {
+  const button = document.getElementById("approve-all");
+  button.disabled = true;
   try {
-    const res = await fetch(`${API}/api/reports/${DATA._code}/approve`, {
+    const response = await fetch(`/api/reports/${encodeURIComponent(activeCode)}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ edited_reports: edited, report_type: rt })
+      body: JSON.stringify({ edited_reports: collectEditedReports() })
     });
-    if (!res.ok) throw new Error(await res.text());
-    const out = await res.json();
-    APPROVED = new Set(out.approved_report_types || []);
-    $(`pill-${rt}`).className = "pill approved";
-    $(`pill-${rt}`).textContent = "Approved";
-    btn.textContent = "Re-approve with edits";
-    $(`note-${rt}`).textContent = out.changes
-      ? `Approved with ${out.changes} correction${out.changes === 1 ? "" : "s"}.`
-      : "Approved with no changes to the AI draft.";
-    toast("Report approved.");
-    renderReports();
-    if (out.status === "approved") setTimeout(() => show("screen-done"), 700);
-  } catch (e) {
-    toast("Approve failed. Try again.");
+    if (!response.ok) throw new Error(await response.text());
+    activeRecord = await response.json();
+    renderRecord(activeRecord);
+    toast("Reports approved and stored.");
+  } catch (error) {
+    toast(`Approval failed: ${error.message}`);
   } finally {
-    btn.disabled = false;
+    button.disabled = false;
   }
 }
 
-function updateProgress() {
-  const total = reportTypes().length;
-  const done = reportTypes().filter(rt => APPROVED.has(rt)).length;
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  $("progress-label").textContent = `${done} of ${total} reports approved`;
-  $("progress-pct").textContent = `${pct}%`;
-  $("progress-fill").style.width = `${pct}%`;
-}
+if (activeCode) loadCode(activeCode);
+else renderCodeEntry();
 </script>
 </body>
 </html>

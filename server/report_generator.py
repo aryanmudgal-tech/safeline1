@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import secrets
 import threading
 from pathlib import Path
 
@@ -40,6 +41,74 @@ _store_lock = threading.Lock()
 # In-memory cache; disk (``_DATA_DIR``) is the source of truth so the bot and
 # the review API (separate processes) stay consistent.
 GENERATED_REPORTS: dict[str, dict] = {}
+
+
+def _now_iso() -> str:
+    return datetime.datetime.now().isoformat()
+
+
+def _normalize_access_code(code: str | int | None) -> str | None:
+    digits = "".join(ch for ch in str(code or "") if ch.isdigit())
+    return digits if len(digits) == 6 else None
+
+
+def _read_incident_file(path: Path) -> dict | None:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _write_incident_unlocked(record: dict) -> None:
+    incident_id = record["incident_id"]
+    GENERATED_REPORTS[incident_id] = record
+    _DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with open(_incident_path(incident_id), "w") as f:
+        json.dump(record, f, indent=2)
+
+
+def _access_code_in_use_unlocked(access_code: str, incident_id: str | None = None) -> bool:
+    for rec in GENERATED_REPORTS.values():
+        if rec.get("access_code") == access_code and rec.get("incident_id") != incident_id:
+            return True
+
+    if _DATA_DIR.exists():
+        for path in _DATA_DIR.glob("*.json"):
+            rec = _read_incident_file(path)
+            if rec and rec.get("access_code") == access_code and rec.get("incident_id") != incident_id:
+                return True
+    return False
+
+
+def _generate_access_code_unlocked(incident_id: str | None = None) -> str:
+    for _ in range(1000):
+        access_code = f"{secrets.randbelow(1_000_000):06d}"
+        if not _access_code_in_use_unlocked(access_code, incident_id=incident_id):
+            return access_code
+    raise RuntimeError("Unable to allocate a unique six-digit access code")
+
+
+def _record_status(record: dict) -> str:
+    if record.get("is_emergency"):
+        return "escalated"
+    if record.get("generation_error"):
+        return "generation_failed"
+    reports = record.get("reports") or {}
+    if not reports:
+        return record.get("status") or "generating"
+    if all(report.get("approved") for report in reports.values()):
+        return "approved"
+    return "pending_review"
+
+
+def _generated_at(record: dict) -> str | None:
+    if record.get("generated_at"):
+        return record["generated_at"]
+    for report in (record.get("reports") or {}).values():
+        if report.get("generated_at"):
+            return report["generated_at"]
+    return record.get("created_at")
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +232,61 @@ def _split_fields(report: dict) -> tuple[dict, dict]:
     return values, meta
 
 
+def create_pending_incident(
+    incident_id: str,
+    *,
+    transcript: str | None = None,
+    officer: dict | None = None,
+    officer_badge: str | None = None,
+    report_types: list[str] | None = None,
+    access_code: str | int | None = None,
+) -> dict:
+    """Create or update a portal-visible incident before reports finish.
+
+    The six-digit ``access_code`` is what the voice agent reads on the call.
+    While reports are still being generated, GET /api/reports/{code} returns
+    this record with ``status="generating"`` and no report payload yet.
+    """
+    normalized_code = _normalize_access_code(access_code)
+    if access_code is not None and not normalized_code:
+        raise ValueError("access_code must contain exactly six digits")
+
+    now = _now_iso()
+    with _store_lock:
+        existing = GENERATED_REPORTS.get(incident_id)
+        if not existing:
+            path = _incident_path(incident_id)
+            existing = _read_incident_file(path) if path.exists() else None
+
+        code = normalized_code or (existing or {}).get("access_code")
+        if not code:
+            code = _generate_access_code_unlocked(incident_id=incident_id)
+        elif _access_code_in_use_unlocked(code, incident_id=incident_id):
+            raise ValueError(f"access_code {code} is already in use")
+
+        record = {
+            **(existing or {}),
+            "incident_id": incident_id,
+            "access_code": code,
+            "officer_badge": officer_badge or (officer or {}).get("badge") or (existing or {}).get("officer_badge"),
+            "officer": officer or (existing or {}).get("officer", {}),
+            "transcript": transcript if transcript is not None else (existing or {}).get("transcript", ""),
+            "is_emergency": bool((existing or {}).get("is_emergency", False)),
+            "created_at": (existing or {}).get("created_at") or now,
+            "generated_at": (existing or {}).get("generated_at"),
+            "status": "generating",
+            "generation_error": None,
+            "report_types": report_types or (existing or {}).get("report_types", []),
+            "reports": (existing or {}).get("reports", {}),
+        }
+        _write_incident_unlocked(record)
+
+    logger.info(
+        f"Created pending incident {incident_id} with access_code={record['access_code']}"
+    )
+    return record
+
+
 def store_reports(
     incident_id: str,
     reports: dict,
@@ -170,6 +294,7 @@ def store_reports(
     officer: dict | None = None,
     officer_badge: str | None = None,
     is_emergency: bool = False,
+    access_code: str | int | None = None,
 ) -> dict:
     """Persist generated reports for an incident.
 
@@ -177,40 +302,57 @@ def store_reports(
     to the draft until the officer edits it), along with the template metadata
     so the review UI can render labels and priorities.
     """
-    record = {
-        "incident_id": incident_id,
-        "officer_badge": officer_badge or (officer or {}).get("badge"),
-        "officer": officer or {},
-        "transcript": transcript or "",
-        "is_emergency": is_emergency,
-        "created_at": datetime.datetime.now().isoformat(),
-        "report_types": list(reports.keys()),
-        "reports": {},
-    }
+    normalized_code = _normalize_access_code(access_code)
+    if access_code is not None and not normalized_code:
+        raise ValueError("access_code must contain exactly six digits")
 
-    for report_type, report in reports.items():
-        values, meta = _split_fields(report)
-        try:
-            template = load_template(report_type)["required_fields"]
-        except FileNotFoundError:
-            template = [{"field": k, "label": k, "priority": 2} for k in values]
-        record["reports"][report_type] = {
-            "_report_type": report_type,
-            "template": template,
-            "ai_draft": dict(values),
-            "officer_version": dict(values),
-            "approved": False,
-            "approved_at": None,
-            "diff": {},
-            "generated_at": meta.get("_generated_at"),
-            "status": "draft",
+    now = _now_iso()
+    with _store_lock:
+        existing = GENERATED_REPORTS.get(incident_id)
+        if not existing:
+            path = _incident_path(incident_id)
+            existing = _read_incident_file(path) if path.exists() else None
+
+        code = normalized_code or (existing or {}).get("access_code")
+        if not code:
+            code = _generate_access_code_unlocked(incident_id=incident_id)
+        elif _access_code_in_use_unlocked(code, incident_id=incident_id):
+            raise ValueError(f"access_code {code} is already in use")
+
+        record = {
+            "incident_id": incident_id,
+            "access_code": code,
+            "officer_badge": officer_badge or (officer or {}).get("badge") or (existing or {}).get("officer_badge"),
+            "officer": officer or (existing or {}).get("officer", {}),
+            "transcript": transcript if transcript is not None else (existing or {}).get("transcript", ""),
+            "is_emergency": is_emergency,
+            "created_at": (existing or {}).get("created_at") or now,
+            "generated_at": now,
+            "status": "pending_review",
+            "generation_error": None,
+            "report_types": list(reports.keys()),
+            "reports": {},
         }
 
-    with _store_lock:
-        GENERATED_REPORTS[incident_id] = record
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_incident_path(incident_id), "w") as f:
-            json.dump(record, f, indent=2)
+        for report_type, report in reports.items():
+            values, meta = _split_fields(report)
+            try:
+                template = load_template(report_type)["required_fields"]
+            except FileNotFoundError:
+                template = [{"field": k, "label": k, "priority": 2} for k in values]
+            record["reports"][report_type] = {
+                "_report_type": report_type,
+                "template": template,
+                "ai_draft": dict(values),
+                "officer_version": dict(values),
+                "approved": False,
+                "approved_at": None,
+                "diff": {},
+                "generated_at": meta.get("_generated_at") or now,
+                "status": "draft",
+            }
+
+        _write_incident_unlocked(record)
 
     logger.info(
         f"Stored incident {incident_id}: reports={list(record['reports'].keys())} "
@@ -233,6 +375,33 @@ def get_incident(incident_id: str) -> dict | None:
     return None
 
 
+def get_incident_by_access_code(access_code: str | int) -> dict | None:
+    """Return an incident by its six-digit portal access code."""
+    normalized = _normalize_access_code(access_code)
+    if not normalized:
+        return None
+
+    with _store_lock:
+        for record in GENERATED_REPORTS.values():
+            if record.get("access_code") == normalized:
+                return record
+
+        if _DATA_DIR.exists():
+            for path in _DATA_DIR.glob("*.json"):
+                record = _read_incident_file(path)
+                if not record:
+                    continue
+                GENERATED_REPORTS[record["incident_id"]] = record
+                if record.get("access_code") == normalized:
+                    return record
+    return None
+
+
+def resolve_incident(identifier: str | int) -> dict | None:
+    """Resolve either a six-digit access code or a legacy incident id."""
+    return get_incident_by_access_code(identifier) or get_incident(str(identifier))
+
+
 def get_reports(incident_id: str) -> dict:
     """Return just the reports map for an incident (spec-compatible helper)."""
     record = get_incident(incident_id)
@@ -250,8 +419,11 @@ def list_incidents() -> list[dict]:
                 summaries.append(
                     {
                         "incident_id": rec.get("incident_id"),
+                        "access_code": rec.get("access_code"),
                         "officer_badge": rec.get("officer_badge"),
                         "created_at": rec.get("created_at"),
+                        "generated_at": _generated_at(rec),
+                        "status": _record_status(rec),
                         "report_types": rec.get("report_types", []),
                         "approved": all(
                             r.get("approved") for r in rec.get("reports", {}).values()
@@ -300,17 +472,93 @@ def approve_report(incident_id: str, report_type: str, edited_fields: dict) -> d
     report["approved"] = True
     report["approved_at"] = datetime.datetime.now().isoformat()
     report["status"] = "approved"
+    record["status"] = _record_status(record)
+    if record["status"] == "approved":
+        record["approved_at"] = _now_iso()
 
     with _store_lock:
-        GENERATED_REPORTS[incident_id] = record
-        _DATA_DIR.mkdir(parents=True, exist_ok=True)
-        with open(_incident_path(incident_id), "w") as f:
-            json.dump(record, f, indent=2)
+        _write_incident_unlocked(record)
 
     _feed_corrections(record.get("transcript", ""), report_type, diff)
 
     logger.info(f"Approved {report_type} for {incident_id} with {len(diff)} edits")
     return report
+
+
+def approve_reports(identifier: str | int, edited_reports: dict) -> dict:
+    """Approve one or more reports from the portal's bulk edit payload."""
+    record = resolve_incident(identifier)
+    if not record:
+        raise KeyError(f"Unknown report code or incident id {identifier}")
+    if _record_status(record) in {"generating", "generation_failed", "escalated"}:
+        raise ValueError(f"Incident {record['incident_id']} is not ready for approval")
+    if not edited_reports:
+        raise ValueError("edited_reports must include at least one report")
+
+    for report_type, fields in edited_reports.items():
+        if report_type not in record.get("reports", {}):
+            raise KeyError(f"Incident {record['incident_id']} has no report '{report_type}'")
+        approve_report(record["incident_id"], report_type, fields or {})
+
+    return get_incident(record["incident_id"]) or record
+
+
+def mark_generation_failed(incident_id: str, error: str) -> dict | None:
+    """Move a pending incident into a visible failure state."""
+    with _store_lock:
+        record = GENERATED_REPORTS.get(incident_id)
+        if not record:
+            path = _incident_path(incident_id)
+            record = _read_incident_file(path) if path.exists() else None
+        if not record:
+            return None
+        record["status"] = "generation_failed"
+        record["generation_error"] = error
+        _write_incident_unlocked(record)
+        return record
+
+
+def portal_response(record: dict) -> dict:
+    """External API shape for the six-digit-code web portal."""
+    officer = record.get("officer") or {}
+    reports = record.get("reports") or {}
+    flat_reports = {
+        report_type: dict(report.get("officer_version") or report.get("ai_draft") or {})
+        for report_type, report in reports.items()
+    }
+    ai_drafts = {
+        report_type: dict(report.get("ai_draft") or {}) for report_type, report in reports.items()
+    }
+    report_templates = {
+        report_type: report.get("template", []) for report_type, report in reports.items()
+    }
+    approvals = {
+        report_type: {
+            "approved": bool(report.get("approved")),
+            "approved_at": report.get("approved_at"),
+            "diff": report.get("diff", {}),
+        }
+        for report_type, report in reports.items()
+    }
+
+    return {
+        "incident_id": record.get("incident_id"),
+        "access_code": record.get("access_code"),
+        "officer_name": officer.get("name"),
+        "officer_badge": record.get("officer_badge") or officer.get("badge"),
+        "created_at": record.get("created_at"),
+        "generated_at": _generated_at(record),
+        "status": _record_status(record),
+        "generation_error": record.get("generation_error"),
+        "reports": flat_reports,
+        "report_templates": report_templates,
+        "ai_draft": ai_drafts,
+        "approvals": approvals,
+        "report_types": record.get("report_types", list(flat_reports.keys())),
+        "transcript": record.get("transcript", ""),
+        "is_emergency": bool(record.get("is_emergency")),
+        "escalation_reason": record.get("escalation_reason"),
+    }
 
 
 def _feed_corrections(transcript: str, report_type: str, diff: dict):

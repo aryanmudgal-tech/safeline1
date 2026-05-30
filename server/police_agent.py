@@ -21,7 +21,6 @@ from __future__ import annotations
 import datetime
 import json
 import os
-import random
 from pathlib import Path
 
 import aiohttp
@@ -30,7 +29,9 @@ from pipecat.frames.frames import EndTaskFrame, FunctionCallResultProperties
 from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.llm_service import FunctionCallParams
 
+from report_generator import create_pending_incident
 from report_generator import generate_reports as generate_reports_impl
+from report_generator import mark_generation_failed
 from report_generator import store_reports
 
 _SERVER_DIR = Path(__file__).resolve().parent
@@ -175,11 +176,6 @@ def transcript_from_context(context) -> str:
 # --------------------------------------------------------------------------- #
 # Review portal hand-off (6-digit access code)
 # --------------------------------------------------------------------------- #
-def _generate_access_code() -> str:
-    """A 6-digit code the officer enters in the portal (e.g. '481920')."""
-    return f"{random.randint(0, 999999):06d}"
-
-
 _DIGIT_WORDS = {
     "0": "zero",
     "1": "one",
@@ -361,7 +357,18 @@ def create_tools(session: dict) -> list:
 
         incident_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
         session["incident_id"] = incident_id
-        logger.info(f"Generating reports {requested} for incident {incident_id}")
+        pending = create_pending_incident(
+            incident_id,
+            transcript=transcript,
+            officer=officer,
+            officer_badge=badge,
+            report_types=requested,
+        )
+        access_code = pending["access_code"]
+        logger.info(
+            f"Generating reports {requested} for incident {incident_id} "
+            f"access_code={access_code}"
+        )
 
         try:
             reports = await generate_reports_impl(transcript, requested, badge)
@@ -372,16 +379,18 @@ def create_tools(session: dict) -> list:
                 transcript=transcript,
                 officer=officer,
                 officer_badge=badge,
+                access_code=access_code,
             )
         except Exception as e:
             logger.error(f"Report generation/store failed: {e}")
+            mark_generation_failed(incident_id, str(e))
             await params.result_callback(
                 {"ok": False, "reason": "Report generation hit an error; please try again."}
             )
             return
 
         clean_reports = _strip_report_metadata(reports)
-        code = _generate_access_code()
+        code = access_code
         session["access_code"] = code
         # Until the officer confirms receipt, the idle watchdog will re-read the
         # code every ~15s of silence (see the bot pipeline's IdleFrameProcessor).

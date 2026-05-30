@@ -45,6 +45,31 @@ uv run python review_ui/api.py
 
 Open http://localhost:7860, click **Connect**, and run a scenario from `mock_data/demo_scenarios.json` (e.g. give badge **3892**, then read the DUI narrative). When the agent says it's generating reports, it stores them and (if Twilio creds + a caller number are set) texts the review link. The link opens the review UI; the link is also logged to the bot's console for local WebRTC testing where there's no phone number.
 
+## Six-digit review portal
+
+The review UI is now code-first. Open the review server URL, enter the six-digit code spoken by the voice agent, and the portal will poll until reports are ready.
+
+API contract:
+
+```http
+GET /api/reports/{6-digit-code}
+POST /api/reports/{6-digit-code}/approve
+```
+
+`GET` returns `status: "generating"` while report generation is still running, then `status: "pending_review"` with editable report payloads. `POST` accepts:
+
+```json
+{
+  "edited_reports": {
+    "incident_report": {
+      "incident_date": "2026-05-30"
+    }
+  }
+}
+```
+
+Approvals preserve the immutable AI draft, store the officer-edited version, compute diffs, and feed those corrections into the learning loop.
+
 **Test report generation without a call:**
 
 ```bash
