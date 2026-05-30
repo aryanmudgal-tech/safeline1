@@ -9,7 +9,9 @@ this business logic:
   * officer roster lookup by badge number,
   * the LLM tools (lookup_officer, escalate_emergency, generate_reports,
     end_session),
-  * transcript capture, report generation, persistence, and the review-link SMS.
+  * transcript capture, report generation, persistence, and handing the officer
+    a 6-digit access code (the bot POSTs reports to the review portal over HTTP
+    and speaks the code aloud — no SMS).
 
 The Pipecat pipeline, Twilio transport, and Pipecat Cloud deploy are untouched.
 """
@@ -19,6 +21,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import random
 from pathlib import Path
 
 import aiohttp
@@ -90,15 +93,35 @@ are being filed?
 5. Administrative: Case number, assisting officers
 
 When all critical fields are filled, say: "I have everything I need. I'm \
-generating your reports now and will send you a link to review them." In that \
-SAME turn, call the generate_reports tool with the list of report types you \
-decided on. After it returns, briefly confirm the review link was sent, then \
-call end_session.
+generating your reports now." In that SAME turn, call the generate_reports \
+tool with the list of report types you decided on. The tool returns the \
+officer's access code in the "spoken_code" field. The code is ALWAYS EXACTLY \
+SIX DIGITS.
+
+ACCESS CODE HANDOFF (follow exactly):
+- Read the code using the EXACT words given in the tool's "spoken_code" field, \
+ONE digit at a time, slowly (for example: "four... eight... one... nine... \
+two... zero").
+- The code is EXACTLY SIX digits. Never add, drop, change, or invent digits. \
+Never read it as one big number (do NOT say "four hundred eighty-one \
+thousand..."). Say six separate digits only.
+- Then tell the officer to enter it at the Safeline portal and ask: "Did you \
+get the code?"
+- WAIT for the officer's reply. Do NOT end the call yet.
+- ONLY when the officer explicitly confirms they have the code (for example \
+"I got the code", "got it", "yes I have it"), say a brief closing line \
+(e.g. "Stay safe out there.") and call the confirm_code_received tool.
+- If the officer has not confirmed, did not hear it, or asks you to repeat, \
+read the SAME six digits again (digit by digit) and ask "Did you get the \
+code?" again. Keep repeating until they confirm. NEVER hang up or call \
+confirm_code_received before the officer confirms they received the code.
 
 RULES:
 - Ask only ONE question at a time.
 - Never ask about something already mentioned in the narrative.
 - Never make up information - only use what the officer told you.
+- The access code is ALWAYS exactly six digits. Read only the digits provided \
+by the generate_reports tool, exactly six of them, one at a time.
 - If the officer mentions a serious injury, a fatality, or an ongoing emergency, \
 immediately say "This sounds like it needs immediate attention - please contact \
 your supervisor directly" and call the escalate_emergency tool. Do NOT generate \
@@ -150,43 +173,96 @@ def transcript_from_context(context) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# SMS (Twilio REST API over aiohttp — no extra SDK dependency)
+# Review portal hand-off (6-digit access code)
 # --------------------------------------------------------------------------- #
-async def send_review_sms(to_number: str, review_url: str) -> bool:
-    account_sid = os.getenv("TWILIO_ACCOUNT_SID")
-    auth_token = os.getenv("TWILIO_AUTH_TOKEN")
-    from_number = os.getenv("TWILIO_PHONE_NUMBER")
+def _generate_access_code() -> str:
+    """A 6-digit code the officer enters in the portal (e.g. '481920')."""
+    return f"{random.randint(0, 999999):06d}"
 
-    if not (account_sid and auth_token and from_number and to_number):
-        logger.warning(
-            "Skipping SMS (missing Twilio creds, from-number, or caller number). "
-            f"Review link: {review_url}"
-        )
-        return False
 
-    url = f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json"
-    data = {
-        "To": to_number,
-        "From": from_number,
-        "Body": f"Your Safeline reports are ready for review: {review_url}",
+_DIGIT_WORDS = {
+    "0": "zero",
+    "1": "one",
+    "2": "two",
+    "3": "three",
+    "4": "four",
+    "5": "five",
+    "6": "six",
+    "7": "seven",
+    "8": "eight",
+    "9": "nine",
+}
+
+
+def _digits_to_words(code: str) -> str:
+    """Spell a code as separate digit words so the LLM reads it verbatim and
+    never collapses it into one large number (e.g. '481920' -> 'four, eight,
+    one, nine, two, zero')."""
+    return ", ".join(_DIGIT_WORDS.get(ch, ch) for ch in code)
+
+
+def _strip_report_metadata(reports: dict) -> dict:
+    """Drop the internal ``_``-prefixed metadata so the portal only shows real
+    report fields."""
+    return {
+        report_type: {k: v for k, v in fields.items() if not k.startswith("_")}
+        for report_type, fields in reports.items()
+    }
+
+
+async def submit_reports_to_review_ui(
+    code: str,
+    incident_id: str,
+    officer_badge: str,
+    officer_name: str,
+    reports: dict,
+    transcript: str,
+) -> bool:
+    """POST generated reports to the review portal, keyed by ``code``.
+
+    The bot runs remotely on Pipecat Cloud and the portal runs elsewhere
+    (exposed via ngrok), so they hand off over HTTP rather than shared storage.
+    """
+    review_ui_url = os.getenv("REVIEW_UI_URL", "http://localhost:8080").rstrip("/")
+    payload = {
+        "code": code,
+        "incident_id": incident_id,
+        "officer_badge": officer_badge,
+        "officer_name": officer_name,
+        "reports": reports,
+        "transcript": transcript,
+        "generated_at": datetime.datetime.now().isoformat(),
     }
     try:
-        auth = aiohttp.BasicAuth(account_sid, auth_token)
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, data=data, auth=auth) as resp:
-                if resp.status >= 300:
-                    logger.error(f"Twilio SMS error ({resp.status}): {await resp.text()}")
+            async with session.post(
+                f"{review_ui_url}/api/reports/save", json=payload
+            ) as resp:
+                if resp.status != 200:
+                    logger.error(
+                        f"Review UI save failed ({resp.status}): {await resp.text()}"
+                    )
                     return False
-        logger.info(f"Sent review SMS to {to_number}: {review_url}")
+        logger.info(f"Posted reports to review portal {review_ui_url} under code {code}")
         return True
     except Exception as e:
-        logger.error(f"Failed to send review SMS: {e}")
+        logger.error(f"Failed to post reports to review portal: {e}")
         return False
 
 
-def review_url_for(incident_id: str) -> str:
-    base = os.getenv("APP_BASE_URL", "http://localhost:8080").rstrip("/")
-    return f"{base}/review?incident_id={incident_id}"
+def code_repeat_instruction(code: str) -> str:
+    """System-message text that tells the agent to re-read the SAME six digits
+    and re-ask for confirmation. Used by the bot's idle watchdog so the agent
+    repeats the code every ~15s of officer silence until they confirm."""
+    spaced = _digits_to_words(code)
+    return (
+        "The officer has NOT yet confirmed they received the access code. "
+        "Say: 'Did you get the code? Let me repeat it.' Then read these six "
+        f"digits one at a time, slowly: {spaced}. Then ask: 'Did you get the "
+        "code?' Read ONLY these six digits, exactly six, and do not add any "
+        "digits. Do not call any tool until the officer confirms they received "
+        "the code."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -195,8 +271,9 @@ def review_url_for(incident_id: str) -> str:
 def create_tools(session: dict) -> list:
     """Build the per-call tool functions, closed over a mutable ``session`` dict.
 
-    ``session`` must contain ``context`` (the LLMContext, set by the caller after
-    it's created) and may contain ``from_number`` (caller phone for SMS).
+    ``session`` must contain ``context`` (the LLMContext, set by the caller
+    after it's created). The generated 6-digit access code is stored back on
+    ``session["access_code"]``.
     """
     roster = load_roster()
 
@@ -256,9 +333,10 @@ def create_tools(session: dict) -> list:
         )
 
     async def generate_reports(params: FunctionCallParams, report_types: list[str]) -> None:
-        """Generate the police reports from the conversation and text the officer
-        a review link. Call this only after all legally-critical fields are filled
-        and you've told the officer you're generating their reports.
+        """Generate the police reports from the conversation, hand them to the
+        review portal, and return a six-digit access code the officer will use
+        to review them. Call this only after all legally-critical fields are
+        filled and you've told the officer you're generating their reports.
 
         Args:
             report_types: Which reports to generate. Valid values:
@@ -279,6 +357,7 @@ def create_tools(session: dict) -> list:
         transcript = transcript_from_context(context) if context else ""
         badge = session.get("badge", "")
         officer = session.get("officer") or {"badge": badge}
+        officer_name = officer.get("name") or f"Officer (badge {badge or 'unknown'})"
 
         incident_id = f"INC-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}"
         session["incident_id"] = incident_id
@@ -286,6 +365,7 @@ def create_tools(session: dict) -> list:
 
         try:
             reports = await generate_reports_impl(transcript, requested, badge)
+            # Keep the permanent on-disk audit trail (immutable AI draft) as well.
             store_reports(
                 incident_id,
                 reports,
@@ -300,26 +380,72 @@ def create_tools(session: dict) -> list:
             )
             return
 
-        review_url = review_url_for(incident_id)
-        sms_sent = await send_review_sms(session.get("from_number"), review_url)
+        clean_reports = _strip_report_metadata(reports)
+        code = _generate_access_code()
+        session["access_code"] = code
+        # Until the officer confirms receipt, the idle watchdog will re-read the
+        # code every ~15s of silence (see the bot pipeline's IdleFrameProcessor).
+        session["awaiting_code_confirmation"] = True
+        posted = await submit_reports_to_review_ui(
+            code=code,
+            incident_id=incident_id,
+            officer_badge=badge,
+            officer_name=officer_name,
+            reports=clean_reports,
+            transcript=transcript,
+        )
 
         await params.result_callback(
             {
                 "ok": True,
                 "incident_id": incident_id,
                 "reports_generated": list(reports.keys()),
-                "review_url": review_url,
-                "sms_sent": sms_sent,
+                "access_code": code,
+                "spoken_code": _digits_to_words(code),
+                "digit_count": 6,
+                "posted_to_portal": posted,
+                "instructions": (
+                    "Read EXACTLY these six digits to the officer, one at a time, "
+                    "using the words in spoken_code. Do not add or change any "
+                    "digits. Then ask 'Did you get the code?' and do NOT end the "
+                    "call until the officer confirms they received it; only then "
+                    "call confirm_code_received."
+                ),
             }
         )
 
+    async def confirm_code_received(params: FunctionCallParams) -> None:
+        """End the call AFTER the officer has explicitly confirmed they received
+        the six-digit access code (e.g. they said "I got the code", "got it", or
+        "yes I have it").
+
+        Call this ONLY once the officer confirms. You must say a brief closing
+        line (e.g. "Stay safe out there.") in the SAME turn before calling it.
+        Do NOT call this if the officer has not yet confirmed they have the code.
+        """
+        session["awaiting_code_confirmation"] = False
+        logger.info("Officer confirmed code receipt — ending session")
+        await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
+        await params.result_callback(
+            {"ok": True}, properties=FunctionCallResultProperties(run_llm=False)
+        )
+
     async def end_session(params: FunctionCallParams) -> None:
-        """End the call. Only call this AFTER you've said a brief closing line in
-        the same turn (e.g. "Stay safe out there.")."""
+        """End the call. Do NOT use this to end after generating reports — use
+        confirm_code_received once the officer confirms they got the code. Only
+        use this for unrelated endings, and only AFTER saying a brief closing
+        line in the same turn."""
+        session["awaiting_code_confirmation"] = False
         logger.info("end_session invoked — pushing EndTaskFrame upstream")
         await params.llm.push_frame(EndTaskFrame(), FrameDirection.UPSTREAM)
         await params.result_callback(
             {"ok": True}, properties=FunctionCallResultProperties(run_llm=False)
         )
 
-    return [lookup_officer, escalate_emergency, generate_reports, end_session]
+    return [
+        lookup_officer,
+        escalate_emergency,
+        generate_reports,
+        confirm_code_received,
+        end_session,
+    ]

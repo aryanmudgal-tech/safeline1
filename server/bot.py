@@ -27,7 +27,12 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    LLMRunFrame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -35,6 +40,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
+from pipecat.processors.idle_frame_processor import IdleFrameProcessor
 from pipecat.runner.types import (
     RunnerArguments,
     SmallWebRTCRunnerArguments,
@@ -53,7 +59,12 @@ from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams, FastAPI
 from pipecat.turns.user_turn_strategies import FilterIncompleteUserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from police_agent import GREETING_KICKOFF, SYSTEM_PROMPT, create_tools
+from police_agent import (
+    GREETING_KICKOFF,
+    SYSTEM_PROMPT,
+    code_repeat_instruction,
+    create_tools,
+)
 
 load_dotenv(override=True)
 
@@ -128,6 +139,8 @@ async def run_bot(
         "escalated": False,
         "incident_id": None,
         "context": None,
+        "access_code": None,
+        "awaiting_code_confirmation": False,
     }
 
     # --- Tools the LLM can call (police documentation) ----------------------
@@ -177,11 +190,34 @@ async def run_bot(
         ),
     )
 
+    # Idle watchdog for the access-code hand-off. After the agent reads the
+    # code, generate_reports sets session["awaiting_code_confirmation"]. If the
+    # officer then stays silent for ~15s without confirming, re-read the SAME
+    # six digits and ask again. The timer resets whenever the officer speaks
+    # (the monitored user frames below), and stops once they confirm (the
+    # confirm_code_received tool clears the flag).
+    async def repeat_code_if_idle(_processor):
+        if not session.get("awaiting_code_confirmation"):
+            return
+        code = session.get("access_code")
+        if not code:
+            return
+        logger.info("Officer idle and code unconfirmed — repeating access code")
+        context.add_message({"role": "system", "content": code_repeat_instruction(code)})
+        await worker.queue_frames([LLMRunFrame()])
+
+    code_idle_watchdog = IdleFrameProcessor(
+        callback=repeat_code_if_idle,
+        timeout=15.0,
+        types=[UserStartedSpeakingFrame, UserStoppedSpeakingFrame, TranscriptionFrame],
+    )
+
     # Pipeline - assembled from reusable components
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
+            code_idle_watchdog,
             user_aggregator,
             llm,
             tts,
