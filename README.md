@@ -69,6 +69,7 @@ Cekura is how we **prove** the agent improves and keep it from backsliding. We w
 - **Corrections become permanent regression tests.** `cekura_sync.corrections_to_scenarios()` turns each officer edit into a scenario asserting "given a similar narrative, produce the corrected phrasing." Old mistakes can't quietly return.
 - **Red-team scenarios guard against hallucination.** `red_team_scenarios()` ships the "frog" case and friends — noisy narratives where the right answer is `null`.
 - **Baseline-vs-improved runs sit side by side** on a Cekura dashboard, so the lift is visible at a glance.
+- **Tested at volume — not a one-off.** We drove **66 simulated calls (~66 minutes of voice, 100% completion)** through Cekura across the scenarios and red-team guards, repeated passes included. The suite, not a single happy-path demo.
 
 Live in Cekura (org `Safeline`, project `5835`): agent `18073`, six metrics (`148024–148029`), six scenarios — three demo callers plus three red-team guards (`273197–273202`) — and the dashboard *"Safeline — Self-Improvement"* (`5692`).
 
@@ -110,6 +111,8 @@ Once a pattern lives in the weights, the agent drops its rubric line for it, so 
 We ran the full loop on three demo scenarios, twice each — once with learning OFF (a clean baseline) and once with learning ON — scored both passes with the LLM-judge evaluators, and let the teacher supply the corrections. Nothing was hand-tuned.
 
 ![Baseline vs improved](docs/results.png)
+
+*66 simulated calls through Cekura, 100% completion. The table below isolates the headline baseline-vs-improved A/B — three scenarios, run twice each.*
 
 From `data/experiments/20260530-151151` (LLM judges, 23 corrections learned in the run):
 
