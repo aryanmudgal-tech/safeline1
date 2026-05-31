@@ -1,346 +1,233 @@
-# Safeline — Police Voice Documentation Agent
+# Safeline — a police documentation voice agent that learns from its own corrections
 
-> Built for the YC Voice Agents Hackathon on top of the Pipecat starter kit.
-
-Safeline is a voice agent that police officers call after an incident. The officer narrates what happened in natural speech; the agent listens, asks targeted follow-up questions to fill gaps, then generates the required police documentation (incident / arrest / use-of-force / accident reports) and texts the officer a link to review, edit, and approve the drafts. Every correction the officer makes is fed back to improve future reports.
-
-**How it beats Axon Draft One**
-
-| Draft One | Safeline |
-| --- | --- |
-| Deletes the AI draft after export (no audit trail) | Every incident is persisted with both the **immutable AI draft** and the **officer-edited version** in `server/data/incidents/` |
-| Hallucinates from ambient audio ("officer shapeshifted into a frog") | `extraction_accuracy` evaluator flags any field not grounded in the transcript; the model is instructed to use `null` over invention |
-| Passive (only summarizes body-cam footage) | Active two-phase voice interview: open narrative → one-question-at-a-time gap filling |
-| Never learns from corrections | Three-layer auto-improvement loop; Layer 1 injects similar past officer corrections as few-shot examples at generation time |
-
-## Architecture
-
-The Pipecat pipeline, Twilio transport, and Pipecat Cloud deploy are **unchanged** from the starter kit. Only the business logic was swapped in.
-
-| File | Role |
-| --- | --- |
-| `server/bot-gpt.py` | Voice bot (Gradium STT → GPT → Gradium TTS). **Run this one first.** |
-| `server/bot-nemotron.py` | Same bot on NVIDIA Nemotron STT+LLM (use once endpoints are provided). |
-| `server/police_agent.py` | Shared police logic: two-phase system prompt, roster lookup, LLM tools, transcript capture, report generation + review-link SMS. |
-| `server/report_generator.py` | LLM field extraction + the permanent, file-backed report store (AI draft + officer version + diff). |
-| `server/templates/*.json` | Required-field definitions for each report type. |
-| `server/mock_data/officer_roster.json` | Badge → officer lookup. |
-| `server/mock_data/demo_scenarios.json` | Three pre-written 60s narratives for testing without calls. |
-| `server/improvement/correction_store.py` | Auto-improvement Layer 1: semantic store of officer corrections (faiss + MiniLM if installed, token-overlap fallback otherwise). |
-| `server/review_ui/` | Standalone FastAPI app + SPA where the officer reviews/edits/approves reports. |
-| `server/cekura_eval.py` | Four evaluators: completeness, extraction accuracy, escalation correctness, question coverage. |
-
-## Run the demo (under 3 minutes)
-
-```bash
-cd server
-uv sync                 # add `--extra improve` for faiss/MiniLM dense retrieval (optional)
-
-# Terminal 1 — voice bot (WebRTC at http://localhost:7860)
-uv run bot-gpt.py
-
-# Terminal 2 — review UI (http://localhost:8080)
-uv run python review_ui/api.py
-```
-
-Open http://localhost:7860, click **Connect**, and run a scenario from `mock_data/demo_scenarios.json` (e.g. give badge **3892**, then read the DUI narrative). When the agent says it's generating reports, it stores them and (if Twilio creds + a caller number are set) texts the review link. The link opens the review UI; the link is also logged to the bot's console for local WebRTC testing where there's no phone number.
-
-## Six-digit review portal
-
-The review UI is now code-first. Open the review server URL, enter the six-digit code spoken by the voice agent, and the portal will poll until reports are ready.
-
-API contract:
-
-```http
-GET /api/reports/{6-digit-code}
-POST /api/reports/{6-digit-code}/approve
-```
-
-`GET` returns `status: "generating"` while report generation is still running, then `status: "pending_review"` with editable report payloads. `POST` accepts:
-
-```json
-{
-  "edited_reports": {
-    "incident_report": {
-      "incident_date": "2026-05-30"
-    }
-  }
-}
-```
-
-Approvals preserve the immutable AI draft, store the officer-edited version, compute diffs, and feed those corrections into the learning loop.
-
-**Test report generation without a call:**
-
-```bash
-uv run python -c "import asyncio,json; from dotenv import load_dotenv; load_dotenv(); \
-from report_generator import generate_reports; \
-s=json.load(open('mock_data/demo_scenarios.json'))[1]; \
-print(asyncio.run(generate_reports('OFFICER: '+s['narrative'], s['expected_reports'], s['badge_number'])))"
-```
-
-**Evaluate a stored incident (Cekura-style):**
-
-```bash
-uv run python cekura_eval.py --all          # or pass an INC-... id
-```
-
-## Cekura integration
-
-The four evaluators in `cekura_eval.py` mirror the custom evaluators to register in the Cekura dashboard:
-
-1. `report_completeness` — are all required fields populated (non-null)?
-2. `extraction_accuracy` — was the right info extracted from the transcript (no hallucinations)?
-3. `escalation_correctness` — did emergencies get flagged for human review instead of documented?
-4. `question_coverage` — did the agent ask about every required field it didn't hear?
-
-Drive Cekura end-to-end from Claude Code:
-
-```
-/plugin marketplace add cekura-ai/cekura-skills
-/plugin install cekura@cekura-skills
-/cekura-report
-```
-
-`GET /api/reports/{incident_id}/diff` exposes the officer-vs-AI corrections for Cekura to consume.
-
-## Auto-improvement loop
-
-When an officer approves a report with edits, `approve_report()` computes the field-level diff and calls `correction_store.add_correction()`. Those corrections are embedded and, on the next generation, the most similar ones are injected into the extraction prompt as few-shot examples — so the agent stops repeating mistakes. Seed examples live in `mock_data/synthetic_corrections.json`.
-
-> Safety: if the officer reports a serious injury, fatality, or ongoing emergency, the agent escalates to a supervisor and **never** generates a report.
+> **Built from scratch at the YC Voice Agents Hackathon (Cekura × Daily, with NVIDIA, AWS, Twilio).** We started from the Pipecat starter kit for the voice plumbing and wrote everything else — the agent, its safety rules, and the entire learning loop — ground up in a single day.
+>
+> **Repo:** https://github.com/aryanmudgal-tech/safeline1
 
 ---
 
-# YC Voice Agents Hackathon
+## 1. What is this?
 
-Welcome to the YC Voice Agents Hackathon, hosted by [Cekura](https://cekura.com) and [Daily](https://daily.co), in partnership with [NVIDIA](https://nvidia.com), [AWS](https://aws.amazon.com), and [Twilio](https://twilio.com).
+Ask an officer what eats their shift, and the answer is paperwork. **56% of law enforcement professionals spend three or more hours of every shift writing incident reports instead of being out protecting the public.** That time comes at the end of a long day, the reports have to follow strict conventions (statutory charge codes, force-continuum terms, 24-hour times, Miranda wording), and a small slip can sink a case in court.
 
-The goal of this event is to learn about building, scaling, evaluating, and continuously improving voice agents.
+The tools meant to help fall short in two specific ways. They hallucinate — one well-known system summarized background cartoon audio into a report claiming an officer "shapeshifted into a frog." And they forget — Axon's Draft One deletes the AI draft the moment the officer exports it, so it keeps no record of what the officer fixed and never improves at the things officers fix over and over.
 
-## Schedule, rules, and prizes
+**Safeline is a voice agent an officer calls after an incident.** The officer just talks. Here's the full loop:
 
-This is a one-day event. Please arrive by 8:30. We'll kick things off at 9:00.
+1. **Open narrative** — the officer says what happened, in their own words.
+2. **Targeted follow-ups** — the agent asks one question at a time, only for required fields it didn't already hear.
+3. **Report generation** — it extracts structured fields from the transcript and writes `null` for anything the officer never said. Inventing facts is forbidden.
+4. **Six-digit handoff** — the agent speaks a code. The officer opens the review portal, types the code, and edits or approves the drafts.
+5. **Learning** — every edit is saved as a labeled example. The next similar incident gets documented correctly the first time.
 
-### Schedule
+```
+Call ─▶ open narrative ─▶ one-question gap filling ─▶ extract fields (null over invention)
+                                                              │
+                                          generate reports ─▶ speak 6-digit code
+                                                              │
+                                        officer edits & approves in the portal
+                                                              │
+                                      each edit becomes a stored correction
+                                                              │
+                  ┌───────────────────────────┼───────────────────────────┐
+                  ▼                            ▼                           ▼
+          Layer 1: fix the           Layer 2: prove it with       Layer 3: fine-tune the
+          next report now            Cekura (no regressions)       open-weights model
+```
 
-  - 8:00 AM – Doors open & registration
-  - 8:30 AM – Breakfast
-  - 9:00 AM – Welcome / Hackathon begins
-  - 12:00 PM – Lunch
-  - 6:00 PM – Submissions due
-  - 6:00 - 8:00 PM – Dinner, demos, and conversation
-  - 8:00 PM – Judges' presentations
-  - 9:00 PM – We all go home
+Step 5 is the heart of the project. Section 3 takes it apart.
 
-### General guidance
+---
 
-First of all, please respect the YC space. We very much appreciate YC hosting these events. Stay in the designated areas, clean up after meals, and in general be a good guest.
+## 2. Demo video (under 60 seconds)
 
-Build something new for this hackathon. Use the tools from Cekura to evaluate and improve the performance of what you build. Use Pipecat as the orchestration framework for your voice agent. We also encourage you to use the open source models from NVIDIA, but it's okay to use any models that work well for your project.
+> **Video link:** https://drive.google.com/file/d/1xZCKiQ3JQPOsUloO7Ex0ZbiYj8S9HDWf/view?usp=sharing
 
-There will be engineers from Cekura, Daily, NVIDIA, AWS, and Twilio available to help you with your project. Don't hesitate to find us.
+The video is a pure product demo — a call coming in, the agent interviewing the officer, the spoken code, the portal. The *why*, the architecture, and the results all live in this README.
 
-Judging will start at 6:00. In general, the judges want to showcase interesting projects rather than just pick winners. So don't worry too much about what the judges are looking for in a project. Build something that demonstrates creativity, is interesting on a technical level, or solves a real problem! But do keep in mind that the judges want to see great examples of using Cekura to improve voice agent performance, and using open source models from NVIDIA.
+---
 
+## 3. How we used Cekura, Nemotron, and Pipecat
 
-# Tech stack and starting points.
+These three tools serve one goal: **a voice agent that gets better the more it's used.** We call that the self-improvement loop, and it runs in three layers.
 
-This repo contains two versions of a voice agent built with [Pipecat](https://pipecat.ai).
+### The voice layer — Pipecat + NVIDIA Nemotron
 
-The demo bot **Field & Flower** is a neighborhood flower shop: callers order a bouquet for delivery while the bot looks up the catalog, captures delivery details, and places the order. All backend calls are mocked, so the starter runs with nothing but AI service keys.
+The agent is a Pipecat pipeline, shipped in two interchangeable builds:
 
-## Version 1 — GPT-4.1
+| Build | STT | LLM | TTS |
+| --- | --- | --- | --- |
+| `bot-gpt.py` | Gradium | OpenAI GPT-4.1 | Gradium |
+| `bot-nemotron.py` | **Nemotron Speech Streaming** | **Nemotron-3-Super-120B** (vLLM) | Gradium |
 
-You can start with this before the hackathon, if you want to. Or test GPT-4.1 and Nemotron side-by-side during the hackathon, using Cekura.
+Both run locally over WebRTC and over the phone through Twilio. The open-weights Nemotron build is what unlocks Layer 3: open weights mean we can train the model on our own correction data. A closed API model could never be the endpoint of this loop.
 
-This bot only requires a Gradium API key and an OpenAI API key. Sign up for free at [Gradium](https://gradium.ai). We'll provide a code for Gradium credits, during the event.
+### What we use Cekura for
 
-- **STT:** [Gradium](https://gradium.ai)
-- **LLM:** [OpenAI Responses API](https://platform.openai.com/docs/api-reference/responses) (GPT-4.1)
-- **TTS:** [Gradium](https://gradium.ai)
-- **Transports:** SmallWebRTC (local dev) and [Twilio](https://www.twilio.com/en-us) (production telephony)
-- **Deploy target:** [Pipecat Cloud](https://pipecat.daily.co)
+Cekura is how we **prove** the agent improves and keep it from backsliding. We wired it directly into the loop:
 
-## Version 2
+- **Corrections become permanent regression tests.** `cekura_sync.corrections_to_scenarios()` turns each officer edit into a scenario asserting "given a similar narrative, produce the corrected phrasing." Old mistakes can't quietly return.
+- **Red-team scenarios guard against hallucination.** `red_team_scenarios()` ships the "frog" case and friends — noisy narratives where the right answer is `null`.
+- **Baseline-vs-improved runs sit side by side** on a Cekura dashboard, so the lift is visible at a glance.
 
-NVIDIA models hosted on AWS, available during the hackathon. We'll share endpoints for the NVIDIA ASR (STT) and LLM models at the beginning of the day.
+Live in Cekura (org `Safeline`, project `5835`): agent `18073`, six metrics (`148024–148029`), six scenarios — three demo callers plus three red-team guards (`273197–273202`) — and the dashboard *"Safeline — Self-Improvement"* (`5692`).
 
-- **STT:** [Nemotron Speech Streaming](https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b)
-- **LLM:** [Nemotron 3 Super 120B](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-BF16)
-- **TTS:** [Gradium](https://gradium.ai)
-- **Transports:** SmallWebRTC (local dev) and Twilio (production telephony)
-- **Deploy target:** [Pipecat Cloud](https://pipecat.daily.co)
+### The loop, layer by layer
 
-## Develop locally
+**Layer 1 — fix the next report immediately.** This is where the learning happens, and it works on the very next call.
 
-Get the bot running over WebRTC in your browser before you push to the cloud or wire up the phone, for a faster iteration loop.
+- **Capture.** Each portal edit is stored as a correction: the transcript snippet, the original AI value, the officer's value, and the `(report_type, field)` it belongs to. It persists to `corrections_log.jsonl` across restarts.
+- **Retrieve k similar incidents.** A new incident pulls the most similar past corrections. With `sentence-transformers` + `faiss` installed, it uses dense-vector search (all-MiniLM-L6-v2, cosine similarity); without them, it falls back to pure-Python token overlap so the agent runs anywhere.
+- **Compile a rubric.** Dumping raw past corrections into the prompt is noisy and leaks one incident's values into another. So `guidance.py` groups corrections by field and compiles them into a short, deterministic rubric — `charges`: write it as `"VC 23152(a) - DUI"` rather than `"DUI"`; `force_type`: use `"Empty-hand control (takedown)"` rather than `"physical force"`. This is what a prompt optimizer like DSPy MIPROv2 converges toward, produced deterministically so the result is reproducible and cheap. Each line is a phrasing convention, never a fact to assert, so the agent learns the style without borrowing another case's data.
+- **Inject and regenerate.** The rubric goes into the extraction prompt for the new report, so conventions officers keep fixing get applied automatically next time.
 
-### Prerequisites
+**Closing the loop without a human.** In production the signal comes from officers. For a reproducible demo we built an autonomous teacher (`teacher.py`): a stronger expert model writes the ideal report, and the diff against the agent's draft becomes corrections, exactly as an officer edit would. The teacher only *supplies* the signal — it never scores anything — so the before/after measurement stays honest.
 
-- Python 3.11+
-- [`uv`](https://docs.astral.sh/uv/getting-started/installation/) package manager
-- API keys for [OpenAI](https://platform.openai.com) and [Gradium](https://gradium.ai)
+**Layer 2 — prove it, and do no harm.** A change that helps on average can still hurt one case. Layer 2 catches that.
 
-### Setup
+- **Six evaluators** score every report: completeness, extraction accuracy (anti-hallucination), narrative faithfulness, documentation standards, cross-document consistency, and question coverage — plus an escalation-correctness safety check. They run as LLM judges (`llm_judge.py`) with a deterministic heuristic fallback (`cekura_eval.py`), so the suite works offline with zero API spend.
+- **A two-tier regression gate** (`regression_gate.py`) blocks any update that makes something worse. A metric that cliffs (drops past 0.15) blocks on its own; a small dip on a case that improved overall is flagged as a soft dip for review. The gate exits non-zero on a block, so it can gate CI or a deploy.
 
-1. **Clone and enter the server directory:**
+**Layer 3 — move the learning into the weights (the data flywheel).** Layers 1 and 2 live in the prompt. Layer 3 is the slow loop:
 
-   ```bash
-   git clone https://github.com/pipecat-ai/yc-voice-agents-hackathon.git
-   cd yc-voice-agents-hackathon/server
-   ```
+```
+corrections_log.jsonl
+   │  NeMo Curator     (dedupe, balance by report_type / field)
+   ▼
+training.jsonl  (transcript + field → corrected value)   ◀── finetune_export.py
+   │  NeMo Customizer  (LoRA on Nemotron)
+   ▼
+candidate model
+   │  NeMo Evaluator   (re-run the Cekura suite — beat base, no regressions)
+   ▼
+promote → retire the Layer-1 rubric for those patterns → shorter prompt, lower latency
+```
 
-2. **Configure API keys:**
+Once a pattern lives in the weights, the agent drops its rubric line for it, so the prompt shrinks and calls get faster. We didn't run a live fine-tune in the hackathon, but the data export is real and runnable (`uv run python -m improvement.finetune_export`) and emits valid LoRA-ready JSONL.
 
-   ```bash
-   cp .env.example .env
-   # Edit .env and fill in OPENAI_API_KEY, GRADIUM_API_KEY.
-   # TWILIO_* keys are only needed when you wire up the phone (next section).
-   ```
+### Results
 
-3. **Install dependencies:**
+We ran the full loop on three demo scenarios, twice each — once with learning OFF (a clean baseline) and once with learning ON — scored both passes with the LLM-judge evaluators, and let the teacher supply the corrections. Nothing was hand-tuned.
 
-   ```bash
-   uv sync
-   ```
+![Baseline vs improved](docs/results.png)
 
-4. **Run the bot:**
+From `data/experiments/20260530-151151` (LLM judges, 23 corrections learned in the run):
 
-   ```bash
-   # run one or the other of these
-   uv run bot-gpt.py
-   uv run bot-nemotron.py
-   ```
+| Metric | Baseline | Improved | Δ |
+| --- | ---: | ---: | ---: |
+| Documentation Standards | 0.667 | 1.000 | **+0.333** |
+| Question Coverage | 0.000 | 0.333 | **+0.333** |
+| Report Completeness | 0.862 | 0.928 | **+0.066** |
+| Extraction Accuracy | 0.955 | 0.963 | +0.008 |
+| Narrative Faithfulness | 0.988 | 0.993 | +0.005 |
+| Cross-Doc Consistency | 0.933 | 0.933 | +0.000 |
+| **Overall** | **0.809** | **0.923** | **+0.114** |
 
-   Open [http://localhost:7860](http://localhost:7860) and click **Connect** to start talking. First launch takes ~20s while Pipecat downloads VAD and turn-detection models.
-
-## Deploy to Pipecat Cloud
-
-Once the bot works locally, deploy to Pipecat Cloud and connect it to a Twilio phone number so anyone can call in.
-
-### Prerequisites
-
-1. [Sign up for Pipecat Cloud](https://pipecat.daily.co/sign-up)
-2. Install the [Pipecat CLI](https://github.com/pipecat-ai/pipecat-cli) and log in:
-
-   ```bash
-   uv tool install pipecat-ai-cli
-   pc cloud auth login
-   ```
-
-### Configure Twilio
-
-1. [Add credits / upgrade your Twilio account](https://twil.io/yc-hack)
-
-2. [Buy a phone number](https://help.twilio.com/articles/223135247) with voice capability.
-
-3. Get your Pipecat Cloud organization name:
-
-   ```bash
-   pc cloud organizations list
-   ```
-
-4. [Create a TwiML Bin](https://www.twilio.com/docs/serverless/twiml-bins/getting-started#create-a-new-twiml-bin) with this configuration:
-
-   ```xml
-   <?xml version="1.0" encoding="UTF-8"?>
-   <Response>
-     <Connect>
-       <Stream url="wss://api.pipecat.daily.co/ws/twilio">
-         <Parameter name="_pipecatCloudServiceHost"
-           value="flower-bot.YOUR_ORG_NAME"/>
-       </Stream>
-     </Connect>
-   </Response>
-   ```
-
-   Replace `YOUR_ORG_NAME` with the org name from step 2.
-
-5. [Attach the TwiML Bin](https://www.twilio.com/docs/serverless/twiml-bins/getting-started#wire-your-twiml-bin-up-to-an-incoming-phone-call) to your Twilio number: Go to [your phone numbers](https://console.twilio.com/go?to=/account/__account__/us1/senders-hub/list/phone-numbers/inventory) → select your
-number → under **Voice Configuration**, set method to the **TwiML Bin** you created → Save.
-
-6. [Optional] Use [Twilio Dev phone](https://www.twilio.com/docs/labs/dev-phone) for testing.
-
-### Review the deployment configuration
-
-Your deployment details are specified in the `pcc-deploy.toml` file. You can learn more about options in the [docs](https://docs.pipecat.ai/api-reference/cli/cloud/deploy#configuration-file-pcc-deploy-toml).
-
-### Upload secrets
+Verdict: `PASS ✅ promote — 7 improved, 0 regressed, 1 soft-dip`. The biggest gains land exactly where we aimed: **documentation standards** and **question coverage**. Every other metric held or rose.
 
 ```bash
-pc cloud secrets set flower-bot-secrets --file .env
+cd server
+uv run python -m improvement.self_improve --demo       # baseline → teach → improved → delta → gate
+uv run python -m improvement.self_improve --offline    # heuristic scoring, no API spend
 ```
 
-This uploads everything from `.env` to Pipecat Cloud's secure storage. The bot reads from there at runtime, so you don't bake keys into the image.
+---
 
-### Deploy
+## 4. What we built during the hackathon
 
-Build and run your bot on Pipecat Cloud:
+**Borrowed and left untouched:** the Pipecat pipeline scaffold, the Twilio transport, and the Pipecat Cloud deploy config.
 
-```bash
-pc cloud deploy
-```
+**Built from scratch, in the hackathon:**
 
-Learn more about [cloud builds](https://docs.pipecat.ai/pipecat-cloud/guides/cloud-builds).
+- The two-phase police interview prompt, tools, emergency escalation, and six-digit code handoff (`police_agent.py`).
+- Field extraction and the permanent store that keeps the immutable AI draft *and* the officer-edited version (`report_generator.py`), plus the report templates.
+- The review portal — a FastAPI app and SPA where the officer enters the code, edits, and approves (`review_ui/`).
+- **The entire self-improvement loop** (`improvement/`): the correction store with dense-or-fallback retrieval, the deterministic guidance compiler, the autonomous teacher, the six evaluators, the two-tier regression gate, the Cekura sync, the fine-tune export, and the `self_improve` harness that ties them together.
+- The NVIDIA Nemotron build of the bot (`bot-nemotron.py`, `nemotron_llm.py`, `nvidia_stt.py`).
 
-### Call your bot
+The voice plumbing is borrowed. The agent, its safety behavior, and the learning loop are all ours, written this day.
 
-Dial the Twilio number you set up. 🌷
+---
 
-## Test your agent with Cekura
+## 5. Feedback on the tools
 
-[Cekura](https://cekura.com) tests and observes voice agents. For this hackathon, use it to **test the Pipecat bot you build in this repo** — run real conversations against it, score the transcripts, and fix what's failing before you demo.
+### NVIDIA — Nemotron
 
-### Sign up
+**Strong:**
+- **Instruction-following held up.** Our extraction prompt demands strict JSON with exact field names and `null` for anything unstated, and Nemotron-3-Super-120B stuck to it. That discipline is precisely what an anti-hallucination task needs.
+- **The per-request reasoning toggle is a great lever** — we traded latency for quality on the harder multi-report incidents without swapping models.
+- **Open weights make Layer 3 possible.** Our whole flywheel only exists because we can fine-tune the model on officer corrections.
 
-Create your account at **[dashboard.cekura.ai](https://dashboard.cekura.ai)**. If you're approved for this hackathon, just sign up and your credits will show up automatically. If you don't see them, find someone from the Cekura team, they're on-site.
+**Could improve:**
+- **First-token latency on the 120B is high for live phone calls.** Voice agents win or lose on turn-taking; a smaller Nemotron (Nano-class) or faster default decoding would help. A published latency/quality table per model size would speed model selection.
+- **Self-hosting the STT + LLM was the fiddliest part of the day** — endpoint URLs, the reasoning-parser flag, and the `/v1/models` name all had to line up. A single "voice agent quickstart" container bundling ASR + LLM with sane defaults would save hours.
 
-### Onboarding (or skip it)
+### Cekura — building a self-improvement loop
 
-On first login you'll land on a short setup flow that helps you create your first agent and test. Feel free to click through it — **or hit _Skip_** and jump straight to the dashboard if you'd rather set things up yourself. Either way takes a minute.
+**Strong:**
+- The MCP server + Claude Code skills let us create agents, metrics, scenarios, and runs without leaving the terminal — a real speed-up for a one-day build.
+- Modeling **corrections as regression scenarios** mapped perfectly onto Cekura's scenario primitive. Turning real edits into permanent tests felt exactly right.
+- The baseline-vs-improved dashboard sells the lift to a judge in one glance.
 
-### Recommended: start by testing your agent (via Claude Code)
+**Friction (and a bug):**
+- We wanted a **first-class "compare two runs" regression gate** in the platform. We built our own (`regression_gate.py`); the hosted comparison (`check_via_cekura` / `fetch_run_scores`) is still a stub because there was no clean single call to pull two runs' per-scenario, per-metric scores and diff them. A native "promote run B over A only if no metric regressed" check would be the killer feature here.
+- **Bug / gap:** pushing a batch of already-scored *offline* results as call logs for charting wasn't obvious. We serialize a `cekura_payload.json` and drive the upload through MCP, but a documented bulk-ingest endpoint for "I scored these myself, just chart them" would help.
+- Feeding **corrections back as metric feedback to tune the judges** would close the loop even tighter — the judge could learn the same conventions the agent does. We have the data shaped for it but found no hook.
 
-The fastest path — and what we recommend for the hackathon — is to drive Cekura from **Claude Code** using our MCP server + skills. You stay in your terminal, and Cekura handles agent creation, scenario generation, and running the test.
+### Daily — Pipecat / Pipecat Cloud
 
-**1. Install the Cekura skills + MCP** (Claude Code marketplace plugin — bundles the skills, slash commands, and auto-configured MCP server):
-
-```bash
-/plugin marketplace add cekura-ai/cekura-skills
-/plugin install cekura@cekura-skills
-```
-
-Repo: [github.com/cekura-ai/cekura-skills](https://github.com/cekura-ai/cekura-skills) · Full setup + other agents (Cursor, Codex, etc.): **[docs.cekura.ai → Claude Code guide](https://docs.cekura.ai/mcp/claude-code-guide)** and **[Skills](https://docs.cekura.ai/mcp/skills)**.
-
-**2. Run an end-to-end test** of your agent with a single command:
-
-```
-/cekura-report
-```
-
-This spins up anything from 10–20 evaluators (what Cekura calls test cases), runs scenarios against your Pipecat agent, and gives you back a full report — transcripts, scores, and what failed — so you can iterate fast.
-
-> When connecting your agent, **select `Pipecat` as the provider.** Details: [docs.cekura.ai → Pipecat](https://docs.cekura.ai/documentation/integrations/pipecat/automated).
-
-## Learn more
-
-### Pipecat
-
-- [Pipecat Documentation](https://docs.pipecat.ai/)
-- [Pipecat Cloud Deployment](https://docs.pipecat.ai/pipecat-cloud/introduction)
-- [Pipecat Examples](https://github.com/pipecat-ai/pipecat-examples)
-- [Pipecat Discord](https://discord.gg/pipecat)
+- A great launch pad. Local WebRTC iteration before touching the phone kept the dev loop fast, and swapping STT/LLM/TTS services was clean enough to maintain two bot builds in parallel.
+- First launch silently downloads VAD / turn-detection models (~20s). A one-line "this is normal" console note would calm nerves during a timed build.
 
 ### Twilio
 
-- [Twilio Developer Hub](https://www.twilio.com/en-us/developers)
-- [Twilio Documentation](https://www.twilio.com/docs)
-- [Twilio Dev phone](https://www.twilio.com/docs/labs/dev-phone)
+- Wiring a number to the bot through a TwiML Bin was smooth once set up.
+- **The snag:** getting one agent to serve **multiple inbound numbers** took trial and error in the number config. We solved it, but clearer docs on the many-numbers-to-one-agent case would have saved time.
 
-### Cekura
+---
 
-- [Claude Code guide](https://docs.cekura.ai/mcp/claude-code-guide) — MCP + skills setup
-- [Cekura skills](https://docs.cekura.ai/mcp/skills) — all slash commands
-- [Pipecat integration](https://docs.cekura.ai/documentation/integrations/pipecat/automated)
-- [Cekura docs](https://docs.cekura.ai) · [dashboard](https://dashboard.cekura.ai)
+## Takeaway
+
+Voice will be the default interface for high-stress, hands-busy jobs like policing, where typing a report is the worst possible tool. The agents that matter will be the ones that improve the more they're used.
+
+Safeline is that argument, with the receipts. Every officer correction becomes labeled data, the next similar report comes out right, Cekura confirms nothing regressed, and over time the open-weights model folds the lessons into its weights. We measured the flywheel turning once: **+0.114 overall, +0.333 on the conventions officers care about most, zero regressions.**
+
+---
+
+## Appendix — run it locally
+
+```bash
+cd server
+cp .env.example .env          # fill in OPENAI_API_KEY and GRADIUM_API_KEY
+uv sync                       # add `--extra improve` for faiss + MiniLM dense retrieval (optional)
+
+# Terminal 1 — voice bot (WebRTC at http://localhost:7860)
+uv run bot-gpt.py             # or: uv run bot-nemotron.py
+
+# Terminal 2 — review portal (http://localhost:8080)
+uv run python review_ui/api.py
+```
+
+Open http://localhost:7860, click **Connect**, give a badge number (e.g. `3892`), and read one of the narratives in `mock_data/demo_scenarios.json`. The agent generates the reports and speaks a six-digit code; open the portal, enter it, and review.
+
+**Review portal API:**
+
+```http
+GET  /api/reports/{6-digit-code}            # generating → pending_review, with editable reports
+POST /api/reports/{6-digit-code}/approve    # body: { "edited_reports": { ... } } — stores the officer version, feeds the loop
+GET  /api/reports/{incident_id}/diff        # officer-vs-AI corrections, for Cekura to consume
+```
+
+| File / dir | Role |
+| --- | --- |
+| `police_agent.py` | Two-phase interview, tools, escalation, six-digit handoff. |
+| `report_generator.py` | Field extraction + permanent store (AI draft + officer version + diff). |
+| `improvement/correction_store.py` | Layer 1: correction store (faiss/MiniLM, token-overlap fallback). |
+| `improvement/guidance.py` | Layer 1: compiles corrections into the field rubric. |
+| `improvement/teacher.py` | Autonomous corrections — the loop runs without a human. |
+| `improvement/llm_judge.py`, `cekura_eval.py` | Layer 2: six evaluators (LLM judge + heuristic fallback). |
+| `improvement/regression_gate.py` | Layer 2: two-tier promotion gate. |
+| `improvement/cekura_sync.py` | Layer 2: corrections→scenarios, red-team, dashboard. |
+| `improvement/finetune_export.py` | Layer 3: corrections → LoRA-ready JSONL. |
+| `improvement/self_improve.py` | The harness: baseline → teach → improved → delta → gate. |
+| `review_ui/` | FastAPI + SPA review portal. |

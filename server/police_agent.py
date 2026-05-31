@@ -382,7 +382,12 @@ def create_tools(session: dict) -> list:
         )
 
         try:
-            reports = await generate_reports_impl(transcript, requested, badge)
+            # use_learning=True: the live agent applies auto-improvement Layer 1
+            # (compiled guidance from past officer corrections). Set
+            # SAFELINE_USE_LEARNING=false to A/B against an un-taught baseline.
+            reports = await generate_reports_impl(
+                transcript, requested, badge, use_learning=True
+            )
             # Keep the permanent on-disk audit trail (immutable AI draft) as well.
             store_reports(
                 incident_id,

@@ -81,17 +81,45 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 class CorrectionStore:
     """Stores officer corrections and retrieves semantically similar ones."""
 
-    def __init__(self, persist: bool = True):
+    def __init__(
+        self,
+        persist: bool = True,
+        load_synthetic: bool = True,
+        load_logged: bool = True,
+    ):
+        """Args:
+        persist: append new corrections to the on-disk log.
+        load_synthetic: seed from ``synthetic_corrections.json`` (cold start).
+        load_logged: replay the persisted corrections log on startup.
+
+        The self-improvement harness builds isolated stores with both seeding
+        flags off so an experiment starts from a clean slate and is reproducible.
+        """
         self._lock = threading.Lock()
         self._persist = persist
+        # Whether this store mirrors the on-disk corrections log. Only such stores
+        # auto-refresh from disk; isolated experiment stores (load_logged=False)
+        # never touch the real log, so the harness stays reproducible.
+        self._tracks_log = load_logged
         self.corrections: list[dict] = []
+        # Content keys we've already ingested — makes add_correction idempotent so
+        # the same officer edit is never stored or logged twice (e.g. a double
+        # Approve click) and refresh_from_disk only picks up genuinely new lines.
+        self._seen: set[tuple] = set()
         self._dense = _try_load_dense_backend()
         self._index = None
         if self._dense:
             self._index = _faiss.IndexFlatIP(_EMBED_DIM)
         self._token_cache: list[set[str]] = []
-        self._load_synthetic()
-        self._load_logged()
+        if load_synthetic:
+            self._load_synthetic()
+        if load_logged:
+            self._load_logged()
+
+    @staticmethod
+    def _key(transcript, report_type, field, original, corrected) -> tuple:
+        """Identity of a correction by its content (ignores source/note)."""
+        return (str(transcript), report_type, field, str(original), str(corrected))
 
     # -- embedding helpers ---------------------------------------------------
     def _embed(self, text: str):
@@ -168,7 +196,11 @@ class CorrectionStore:
             "note": note,
             "_source": _source,
         }
+        key = self._key(transcript, report_type, field, original, corrected)
         with self._lock:
+            if key in self._seen:
+                return None  # already known — don't store or log a duplicate
+            self._seen.add(key)
             if self._dense:
                 self._index.add(self._embed(transcript))
             self._token_cache.append(_tokenize(f"{transcript} {field or ''}"))
@@ -178,6 +210,50 @@ class CorrectionStore:
         if should_persist:
             self._append_log(record)
         return record
+
+    def refresh_from_disk(self) -> int:
+        """Re-read the corrections log and ingest any entries this store hasn't
+        seen yet. Lets a long-running process (e.g. the voice bot) pick up edits
+        approved by the separate review-portal process WITHOUT a restart.
+
+        Idempotent via the ``_seen`` set, and a no-op for isolated stores that
+        don't track the log (so the experiment harness is unaffected). Returns the
+        number of new corrections added.
+        """
+        if not self._tracks_log or not _LOG_PATH.exists():
+            return 0
+        try:
+            with open(_LOG_PATH) as f:
+                lines = f.readlines()
+        except Exception as e:
+            logger.warning(f"CorrectionStore.refresh_from_disk read failed: {e}")
+            return 0
+
+        added = 0
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                c = json.loads(line)
+            except Exception:
+                continue
+            rec = self.add_correction(
+                transcript=c.get("transcript", ""),
+                original=c.get("original"),
+                corrected=c.get("corrected"),
+                category=c.get("category", "general"),
+                report_type=c.get("report_type"),
+                field=c.get("field"),
+                note=c.get("note"),
+                _persist=False,  # already on disk
+                _source=c.get("_source", "officer"),
+            )
+            if rec is not None:
+                added += 1
+        if added:
+            logger.info(f"CorrectionStore: picked up {added} new correction(s) from disk")
+        return added
 
     def _append_log(self, record: dict):
         try:

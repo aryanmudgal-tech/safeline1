@@ -121,49 +121,130 @@ def load_template(report_type: str) -> dict:
         return json.load(f)
 
 
-def _correction_examples(transcript: str, report_type: str) -> str:
-    """Few-shot block built from similar past officer corrections (Layer 1)."""
+def _correction_examples(transcript: str, report_type: str, store=None) -> str:
+    """Learned-guidance block injected into the extraction prompt (Layer 1).
+
+    Delegates to ``improvement.guidance.build_guidance_block``, which compiles past
+    officer corrections into a concise, deterministic field rubric. Kept as a thin
+    shim so existing callers/tests keep working. Never raises — a broken learning
+    loop must not break report generation.
+    """
     try:
-        from improvement.correction_store import correction_store
+        from improvement.guidance import build_guidance_block
 
-        similar = correction_store.get_similar(transcript, k=3, report_type=report_type)
+        return build_guidance_block(transcript, report_type, store=store)
     except Exception as e:  # never let the learning loop break generation
-        logger.warning(f"correction_store lookup failed: {e}")
-        similar = []
-
-    if not similar:
+        logger.warning(f"guidance lookup failed: {e}")
         return ""
-
-    lines = [
-        "\nLEARNED CORRECTIONS — officers previously edited the AI output like this.",
-        "Apply the same conventions where relevant (do NOT copy values that aren't in this transcript):",
-    ]
-    for c in similar:
-        field = c.get("field") or "?"
-        lines.append(
-            f'- field "{field}": prefer phrasing like "{c.get("corrected")}" '
-            f'instead of "{c.get("original")}" ({c.get("category", "general")})'
-        )
-        if c.get("note"):
-            lines.append(f"    reason: {c['note']}")
-    return "\n".join(lines) + "\n"
 
 
 # --------------------------------------------------------------------------- #
 # Generation
 # --------------------------------------------------------------------------- #
+def _env_flag(name: str, default: bool) -> bool:
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return val.strip().lower() not in ("0", "false", "no", "off")
+
+
+async def _self_critique_revise(
+    client: AsyncOpenAI,
+    model: str,
+    report_type: str,
+    field_help: str,
+    transcript: str,
+    extracted: dict,
+) -> dict:
+    """One reflexion pass: ask the model to audit its own extraction against the
+    transcript, drop anything unsupported (anti-hallucination), and fill fields it
+    can legitimately recover. Returns the revised dict (or the original on error).
+    """
+    prompt = f"""You previously extracted these fields for a {report_type.replace('_', ' ')} \
+from a police officer's narrative. Critique your own work and return a CORRECTED \
+JSON object with the same field names.
+
+Rules:
+- Remove (set to null) any value NOT supported by the transcript. Hallucinations \
+are a critical failure.
+- Fill a field only if the transcript clearly supports it.
+- Do not add commentary.
+
+TRANSCRIPT:
+{transcript}
+
+FIELDS:
+{field_help}
+
+YOUR PREVIOUS EXTRACTION (JSON):
+{json.dumps(extracted, indent=2)}
+
+Return only the corrected JSON object."""
+    try:
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return json.loads(response.choices[0].message.content)
+    except Exception as e:
+        logger.warning(f"self-critique pass failed for {report_type}: {e}")
+        return extracted
+
+
 async def generate_reports(
     transcript: str,
     report_types: list[str],
     officer_badge: str,
     client: AsyncOpenAI | None = None,
+    use_learning: bool | None = None,
+    self_critique: bool | None = None,
+    store=None,
 ) -> dict:
     """Generate structured reports from a conversation transcript.
 
     Returns ``{report_type: {<field>: <value|null>, _report_type, _officer_badge,
     _generated_at, _status}}``. Fields not stated in the transcript are ``null``
     — the model is instructed never to invent information.
+
+    Args:
+        use_learning: When True, inject the learned-guidance block (auto-improvement
+            Layer 1) compiled from past corrections. When False, generate a clean
+            BASELINE with no learning — this is the toggle the self-improvement
+            harness flips to measure the loop's value. Defaults to the
+            ``SAFELINE_USE_LEARNING`` env flag (default True).
+        self_critique: When True, run one reflexion/self-audit pass per report to
+            catch hallucinations before storing. Defaults to ``SAFELINE_SELF_CRITIQUE``
+            (default False — it doubles LLM calls).
+        store: Optional correction store to read learned guidance from (the harness
+            passes an isolated store so experiments stay clean). Defaults to the
+            shared singleton.
     """
+    if use_learning is None:
+        use_learning = _env_flag("SAFELINE_USE_LEARNING", True)
+    if self_critique is None:
+        self_critique = _env_flag("SAFELINE_SELF_CRITIQUE", False)
+
+    # Degrade gracefully with no API key: emit empty (all-null) reports rather than
+    # crash. Lets the self-improvement harness run as a structural smoke test in CI
+    # and never takes down the live bot over a missing key.
+    if client is None and not os.getenv("OPENAI_API_KEY"):
+        logger.warning("OPENAI_API_KEY not set; emitting empty report skeletons.")
+        empty: dict[str, dict] = {}
+        for report_type in report_types:
+            try:
+                fields = [f["field"] for f in load_template(report_type)["required_fields"]]
+            except FileNotFoundError:
+                continue
+            clean = {field: None for field in fields}
+            clean["_report_type"] = report_type
+            clean["_officer_badge"] = officer_badge
+            clean["_generated_at"] = datetime.datetime.now().isoformat()
+            clean["_status"] = "draft"
+            empty[report_type] = clean
+        return empty
+
     client = client or AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     model = os.getenv("REPORT_GEN_MODEL", "gpt-4o-mini")
 
@@ -180,6 +261,8 @@ async def generate_reports(
         fields = [f["field"] for f in field_specs]
         field_help = "\n".join(f'- {f["field"]}: {f["label"]}' for f in field_specs)
 
+        guidance = _correction_examples(transcript, report_type, store=store) if use_learning else ""
+
         prompt = f"""You are extracting structured data from a police officer's incident report narrative.
 
 TRANSCRIPT:
@@ -192,7 +275,7 @@ Do not invent or assume information not explicitly stated by the officer.
 
 Fields to extract:
 {field_help}
-{_correction_examples(transcript, report_type)}
+{guidance}
 Return only valid JSON, no explanation."""
 
         try:
@@ -206,6 +289,11 @@ Return only valid JSON, no explanation."""
         except Exception as e:
             logger.error(f"Report generation failed for {report_type}: {e}")
             extracted = {}
+
+        if self_critique and extracted:
+            extracted = await _self_critique_revise(
+                client, model, report_type, field_help, transcript, extracted
+            )
 
         # Normalize: ensure every templated field exists (null if missing).
         clean = {field: extracted.get(field, None) for field in fields}
@@ -436,14 +524,39 @@ def list_incidents() -> list[dict]:
     return summaries
 
 
+def _norm_value(v):
+    """Canonical form for diffing, so cosmetic differences don't count as edits.
+
+    Treats None / "" / [] as empty, and compares structured values by normalized
+    JSON — so a list ``[{...}]`` and the SAME data sent back as a JSON string are
+    equal (that reformatting is not a real officer correction).
+    """
+    if v in (None, "", []):
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        try:
+            parsed = json.loads(s)
+            if isinstance(parsed, (list, dict)):
+                return json.dumps(parsed, sort_keys=True)
+        except Exception:
+            pass
+        return s
+    try:
+        return json.dumps(v, sort_keys=True)
+    except Exception:
+        return str(v)
+
+
 def _compute_diff(ai_draft: dict, officer_version: dict) -> dict:
-    """Field-level diff: {field: {original, corrected}} for changed fields."""
+    """Field-level diff: {field: {original, corrected}} for genuinely changed
+    fields (cosmetic list/string reformatting is ignored)."""
     diff = {}
     keys = set(ai_draft) | set(officer_version)
     for k in keys:
         before = ai_draft.get(k)
         after = officer_version.get(k)
-        if (before or None) != (after or None):
+        if _norm_value(before) != _norm_value(after):
             diff[k] = {"original": before, "corrected": after}
     return diff
 
