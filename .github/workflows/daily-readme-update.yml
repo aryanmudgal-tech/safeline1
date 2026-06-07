@@ -1,1 +1,33 @@
-404: Not Found
+name: Daily README Update
+
+on:
+  schedule:
+    - cron: '0 10 * * *'
+  workflow_dispatch:
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update README timestamp
+        run: |
+          DATE=$(date -u +"%Y-%m-%d")
+          if grep -q "^<!-- last-updated:" README.md; then
+            sed -i "s/^<!-- last-updated:.*$/<!-- last-updated: $DATE -->/" README.md
+          else
+            echo "" >> README.md
+            echo "<!-- last-updated: $DATE -->" >> README.md
+          fi
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet || git commit -m "chore: daily README timestamp update"
+          git push
