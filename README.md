@@ -234,3 +234,5 @@ GET  /api/reports/{incident_id}/diff        # officer-vs-AI corrections, for Cek
 | `improvement/finetune_export.py` | Layer 3: corrections → LoRA-ready JSONL. |
 | `improvement/self_improve.py` | The harness: baseline → teach → improved → delta → gate. |
 | `review_ui/` | FastAPI + SPA review portal. |
+
+<!-- last-updated: 2026-06-07 -->
